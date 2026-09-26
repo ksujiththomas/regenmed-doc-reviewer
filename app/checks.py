@@ -738,19 +738,21 @@ def check_mp_f018(pages):
                 f"a Graft ID it must be Unprocessed or In Processing Tissue.",
                 t["status_boxes"][status]))
 
-    # --- bottom: none of the fields may be blank
+    # --- bottom: none of the fields may be blank; dates get format check
     bottom = [
-        ("Tissue Discarded By", t["discarded_by_box"]),
-        ("Confirmed By", t["confirmed_by_box"]),
-        ("Discard Date", t["discard_date_box"]),
-        ("Released Packaged — FreezerPro Updated By", t["released_by_box"]),
-        ("Released Packaged — Date", t["released_date_box"]),
-        ("Donor Chart — Log / FreezerPro Updated By", t["donorchart_by_box"]),
-        ("Donor Chart — Date", t["donorchart_date_box"]),
+        ("Tissue Discarded By", t["discarded_by_box"], False),
+        ("Confirmed By", t["confirmed_by_box"], False),
+        ("Discard Date", t["discard_date_box"], True),
+        ("Released Packaged — FreezerPro Updated By", t["released_by_box"], False),
+        ("Released Packaged — Date", t["released_date_box"], True),
+        ("Donor Chart — Log / FreezerPro Updated By", t["donorchart_by_box"], False),
+        ("Donor Chart — Date", t["donorchart_date_box"], True),
     ]
-    for field, box in bottom:
+    for field, box, is_date in bottom:
         if not is_filled(img, box):
             issues.append(_issue("error", field, f"{field} is blank.", box))
+        elif is_date:
+            issues.extend(check_date_zone(img, box, field))
     return issues
 
 
