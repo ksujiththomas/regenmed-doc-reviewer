@@ -57,6 +57,69 @@ def check_date_zone(img, box, field, page=0):
                    "machine-verified — please confirm visually.", box, page)]
 
 
+def _is_shaded(img, box):
+    """Gray-shaded cell (N/A by design) vs white writable cell.
+
+    Shaded fill reads ~180, white paper ~254; ink (<150) is excluded.
+    """
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = [int(v) for v in (box[0] * W, box[1] * H, box[2] * W, box[3] * H)]
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    bright = gray[gray > 150]
+    if bright.size == 0:
+        return False
+    return float(np.median(bright)) < 220
+
+
+def _find_frfd_centers(img):
+    """Y-centers of the 17 MP-F-023 data rows from the printed FRZ/FD text.
+
+    FRZ/FD is pre-printed in every data row; blank spacer rows have none.
+    Returns [] if detection fails (caller falls back to hardcoded centers).
+    """
+    H, W = img.shape[:2]
+    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x0, x1 = int(0.335 * W), int(0.415 * W)
+    region = gray[int(0.48 * H):int(0.84 * H), x0:x1]
+    _, b = cv2.threshold(region, 170, 255, cv2.THRESH_BINARY_INV)
+    b = cv2.morphologyEx(b, cv2.MORPH_CLOSE, np.ones((3, 9), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(b, 8)
+    centers = []
+    for i in range(1, n):
+        area, wpx, hpx = (stats[i, cv2.CC_STAT_AREA], stats[i, cv2.CC_STAT_WIDTH],
+                          stats[i, cv2.CC_STAT_HEIGHT])
+        if area > 200 and 15 < wpx < 120 and 8 < hpx < 40:
+            yc = (stats[i, cv2.CC_STAT_TOP] + hpx / 2 + int(0.48 * H)) / H
+            if yc > 0.49:  # skip the "FRZ / FD" column-header text
+                centers.append(yc)
+    centers.sort()
+    return centers if len(centers) == 17 else []
+
+
+def _qty_cell_filled(img, yc, x0f, x1f):
+    """Is a # Produced / # Packaged cell filled?
+
+    Handwritten values sit low in the cell, so scan a tall window below the
+    FRZ/FD center; grid-line rows (dark across the full cell width) are
+    excluded from the measurement.
+    """
+    H, W = img.shape[:2]
+    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x0, x1 = int(x0f * W), int(x1f * W)
+    y0, y1 = int((yc + 0.002) * H), int((yc + 0.016) * H)
+    c = gray[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    rowfrac = (c < 200).mean(axis=1)
+    keep = rowfrac < 0.35
+    if keep.sum() < 3:
+        return False
+    return float((c[keep] < 200).mean()) > 0.02
+
+
 # ------------------------------------------------------------- MP-F-023
 def check_mp_f023(pages):
     t = MP_F_023
@@ -104,23 +167,19 @@ def check_mp_f023(pages):
                              "Only one entry found — initials and date are both required.",
                              obox))
 
-    # Tissue rows: named tissue must have # Produced and/or # Packaged
-    ncol = t["tissue_cols"]
-    for i, (ry0, ry1) in enumerate(t["tissue_rows"]):
-        nbox = (ncol["name"][0], ry0, ncol["name"][1], ry1)
-        pbox = (t["produced_inset"][0], ry0, t["produced_inset"][1], ry1)
-        kbox = (t["packaged_inset"][0], ry0, t["packaged_inset"][1], ry1)
-        name = is_filled(img, nbox, inset=0.08)
-        prod = is_filled(img, pbox, inset=0.05)
-        pack = is_filled(img, kbox, inset=0.05)
-        label = f"Tissue row {i + 1}"
-        if name and not (prod or pack):
-            issues.append(_issue("error", label,
-                                 "Tissue is listed but # Produced and # Packaged are both blank.",
-                                 (ncol["produced"][0], ry0, ncol["packaged"][1], ry1)))
-        elif (prod or pack) and not name:
-            issues.append(_issue("error", label,
-                                 "Quantity entered but the tissue name is blank.", nbox))
+    # Tissue rows: for white (non-shaded) cells, a listed tissue needs
+    # BOTH # Produced and # Packaged filled. Shaded cells are N/A by design.
+    # Tissue names are pre-printed, so the 17 data rows are located via the
+    # printed FRZ/FD text (blank spacer rows have none).
+    row_centers = _find_frfd_centers(img) or t["frfd_fallback_centers"]
+    for i, yc in enumerate(row_centers):
+        label = t["tissue_names"][i] if i < len(t["tissue_names"]) else f"Tissue row {i + 1}"
+        pbox = (0.515, yc + 0.002, 0.605, yc + 0.016)
+        kbox = (0.635, yc + 0.002, 0.705, yc + 0.016)
+        if not _qty_cell_filled(img, yc, 0.515, 0.605) and not _is_shaded(img, pbox):
+            issues.append(_issue("error", label, "# Produced is blank.", pbox))
+        if not _qty_cell_filled(img, yc, 0.635, 0.705) and not _is_shaded(img, kbox):
+            issues.append(_issue("error", label, "# Packaged is blank.", kbox))
     return issues
 
 

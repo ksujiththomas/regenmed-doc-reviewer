@@ -50,12 +50,18 @@ MP_F_023 = {
     },
     "produced_inset": (0.51, 0.61),
     "packaged_inset": (0.63, 0.71),
-    "tissue_rows": [
-        (0.510, 0.530), (0.530, 0.545), (0.545, 0.560), (0.560, 0.575),
-        (0.575, 0.595), (0.605, 0.625), (0.635, 0.650), (0.650, 0.665),
-        (0.675, 0.695), (0.705, 0.720), (0.720, 0.735), (0.735, 0.750),
-        (0.750, 0.770), (0.780, 0.795), (0.795, 0.810), (0.810, 0.825),
-        (0.825, 0.845),
+    # Fallback FRZ/FD row centers if dynamic detection fails (fractional y).
+    "frfd_fallback_centers": [
+        0.4970, 0.5134, 0.5291, 0.5450, 0.5611, 0.5934, 0.6257, 0.6411, 0.6736,
+        0.7059, 0.7220, 0.7380, 0.7539, 0.7859, 0.8020, 0.8177, 0.8339,
+    ],
+    # Pre-printed tissue names, top to bottom (for issue labels).
+    "tissue_names": [
+        "Posterior Tibialis", "Anterior Tibialis", "Peroneus Longus", "Gracilis",
+        "Semitendinosus", "Patellar Ligament", "Femoral Head", "Humeral Head",
+        "Tri-Cortical Block", "Cancellous 1-10 mm", "Cancellous 4-10 mm",
+        "Cancellous 1-4 mm", "Cancellous 3-6 mm", "Tibia Shaft", "Humerus Shaft",
+        "Femur Shaft", "Fibula Shaft",
     ],
 }
 
