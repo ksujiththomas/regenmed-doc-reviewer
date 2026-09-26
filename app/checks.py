@@ -763,18 +763,28 @@ def _find_by_labels(img):
 
 
 def _sig_value_zone(box, by_labels):
-    """Value zone for a 'By' signature box: right of its 'By:' label.
+    """Value zone for a 'By' signature box: right of its 'By:' label,
+    vertically banded to the label's own line.
 
     Falls back to the full box when no label is found (e.g. OCR failure).
+    The vertical band matters: the box is taller than the signature line
+    and its top edge can catch printed text from the row above, whose ink
+    alone would mask a blank (erased) signature.
     """
-    cands = [x1 for x1, yc in by_labels
+    cands = [(x1, yc) for x1, yc in by_labels
              if box[1] < yc < box[3] and x1 < box[2] - 0.02]
     if not cands:
         return box
-    x0 = max(cands) + 0.008
+    x1, yc = max(cands, key=lambda c: c[0])
+    x0 = x1 + 0.008
     if x0 >= box[2] - 0.02:
         return box
-    return (x0, box[1] + 0.004, box[2], box[3] - 0.004)
+    half = 0.022
+    y0 = max(box[1] + 0.004, yc - half)
+    y1 = min(box[3] - 0.004, yc + half)
+    if y1 - y0 < 0.015:
+        return (x0, box[1] + 0.004, box[2], box[3] - 0.004)
+    return (x0, y0, box[2], y1)
 
 
 def check_mp_f018(pages):
