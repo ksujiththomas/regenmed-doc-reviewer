@@ -132,7 +132,7 @@ def _single_report(f):
         form_name=result["form_name"],
         errors=errors,
         warnings=warnings,
-        passed=(len(issues) == 0),
+        passed=(len(errors) == 0),
         pages=pages,
         already=already,
     )
@@ -192,7 +192,7 @@ def _run_batch_core(payloads):
             "form_name": r["form_name"],
             "n_errors": len(errors),
             "n_warnings": len(warnings),
-            "passed": len(issues) == 0,
+            "passed": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
             "already": already,

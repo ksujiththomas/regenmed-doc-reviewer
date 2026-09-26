@@ -12,6 +12,11 @@ from .vision import (is_filled, ink_fraction, count_x_clusters, count_y_clusters
 from .forms import MP_F_023, QS_F_049, LOT_LOG, MP_F_018
 
 DATE_RE = re.compile(r"^\d{1,2}[-/]\d{1,2}[-/]\d{2}(\d{2})?$")
+# Confident wrong-format read: YYYY-MM-DD / YYYY/MM/DD. Only a full,
+# separator-delimited 4-digit-year read counts — digit fragments from
+# noisy OCR ("2/29") must NOT be flagged, they fall through to the
+# structural check instead.
+WRONG_FMT_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 NA_RE = re.compile(r"^\W*n\W*a\W*$", re.IGNORECASE)
 
 
@@ -52,20 +57,21 @@ def check_date_zone(img, box, field, page=0, strict_format=False):
         return t.replace(" ", "")
 
     if strict_format:
-        text = ocr_digits()
+        text = ocr_digits().strip("/-")
         if DATE_RE.match(text):
             return []  # verified MM/DD/YY
-        if re.search(r"\d", text):
+        if WRONG_FMT_RE.match(text):
             return [_issue("error", field,
                            "Date format looks invalid (expected MM/DD/YY).", box, page)]
-        # Handwriting unreadable: confirm date-like presence structurally.
+        # Handwriting unreadable or only partly read: confirm date-like
+        # presence structurally; never a false format error on OCR noise.
         if _looks_like_date(img, box):
             return [_issue("warning", field,
                            "Date is present but the MM/DD/YY format could not be "
                            "machine-verified — please confirm visually.", box, page)]
     elif _looks_like_date(img, box):
         return []  # fast path: clearly a date
-    elif DATE_RE.match(ocr_digits()):
+    elif DATE_RE.match(ocr_digits().strip("/-")):
         return []
     # structural fallback: too many strokes => probably words, not a date
     H, W = img.shape[:2]
