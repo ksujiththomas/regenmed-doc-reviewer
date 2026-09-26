@@ -15,11 +15,12 @@
   button.btn.secondary { background: #e8ecf1; color: #1c2733; }
   button.btn.secondary:hover { background: #dbe1e9; }
   button.btn.danger { background: #d32f2f; }
+  button.btn.big { padding: 12px 24px; font-size: 17px; }
   .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
     margin-right: 6px; vertical-align: 1px; }
   .on { background: #22a355; } .off { background: #b0b7c0; }
-  select, input[type=text] { padding: 8px 10px; border-radius: 8px;
-    border: 1px solid #c9d2dd; font-size: 15px; }
+  input[type=text] { padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #c9d2dd; font-size: 15px; width: min(420px, 100%); }
   .kv { margin: 6px 0; }
   .kv b { display: inline-block; min-width: 150px; }
   table.runs { width: 100%; border-collapse: collapse; background: #fff; margin-top: 8px; }
@@ -28,6 +29,8 @@
   .ok-badge { color: #22a355; font-weight: 600; }
   .err-badge { color: #d32f2f; font-weight: 600; }
   .hint { color: #5b6b7d; font-size: 14px; }
+  ol.how { margin: 8px 0; padding-left: 22px; color: #33414f; font-size: 15px; }
+  ol.how li { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -45,110 +48,76 @@
   {% if notice %}<div class="alert" style="background:#e8f7ee;border-color:#bfe6cd;color:#14532d">{{ notice }}</div>{% endif %}
 
   <section class="forms">
-    <h2>1 · Google Drive connection</h2>
-    {% if connected %}
-      <p class="kv"><b>Status</b> <span class="status-dot on"></span>Connected as {{ account_email }}</p>
-      <div class="row">
-        <form method="post" action="{{ url_for('drive_disconnect') }}">
-          <button class="btn danger" type="submit">Disconnect</button>
-        </form>
-      </div>
-    {% else %}
-      <p class="kv"><span class="status-dot off"></span>Not connected.</p>
-      {% if oauth_ready %}
-        <a class="btn" href="{{ url_for('drive_connect') }}">Connect Google Drive</a>
-      {% else %}
-        <p class="hint">The server isn't configured for Google sign-in yet
-        (missing Google client ID/secret). Add them as environment variables and redeploy.</p>
-      {% endif %}
-    {% endif %}
-  </section>
-
-  {% if connected %}
-  <section class="forms">
-    <h2>2 · Watch folder</h2>
-    {% if watch_name %}
-      <p class="kv"><b>Watching</b> {{ watch_name }}</p>
-      <p class="hint">Drop PDFs into that Drive folder — they'll be picked up on the next check.</p>
-    {% else %}
-      <p class="hint">Choose which Drive folder to watch:</p>
-      <div class="row" style="margin-bottom:10px">
-        <form method="post" action="{{ url_for('away_page') }}">
-          <input type="hidden" name="action" value="setup_default">
-          <button class="btn" type="submit">✨ Create folder set for me</button>
-        </form>
-      </div>
-      <form method="post" action="{{ url_for('away_page') }}" class="row">
-        <input type="hidden" name="action" value="use_folder">
-        <select name="folder">
-          <option value="">— or pick an existing folder —</option>
-          {% for f in folders %}
-            <option value="{{ f.id }}">{{ f.name }}</option>
-          {% endfor %}
-        </select>
-        <button class="btn secondary" type="submit">Use this folder</button>
-      </form>
-      <form method="post" action="{{ url_for('away_page') }}" class="row" style="margin-top:8px">
-        <input type="hidden" name="action" value="use_folder">
-        <input type="text" name="folder_link" placeholder="…or paste a Drive folder link" size="34">
-        <button class="btn secondary" type="submit">Use link</button>
-      </form>
-    {% endif %}
-  </section>
-
-  <section class="forms">
-    <h2>3 · Schedule</h2>
-    <div class="row">
-      <form method="post" action="{{ url_for('away_page') }}" class="row">
-        <input type="hidden" name="action" value="toggle">
-        <button class="btn {% if enabled %}danger{% endif %}" type="submit">
-          {% if enabled %}⏸ Pause Away mode{% else %}▶ Enable Away mode{% endif %}
-        </button>
-      </form>
-      <form method="post" action="{{ url_for('away_page') }}" class="row">
-        <input type="hidden" name="action" value="interval">
-        <label>Check every
-          <select name="interval_min">
-            {% for m in [15, 30, 60, 120] %}
-              <option value="{{ m }}" {% if interval_min == m %}selected{% endif %}>{{ m }} min</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button class="btn secondary" type="submit">Save</button>
-      </form>
-      <form method="post" action="{{ url_for('away_page') }}">
-        <input type="hidden" name="action" value="run_now">
-        <button class="btn secondary" type="submit">▶ Run a check now</button>
-      </form>
-    </div>
+    <h2>Away mode</h2>
     <p class="kv"><b>Status</b>
-      {% if enabled %}<span class="status-dot on"></span>Active — checking every {{ interval_min }} min
+      {% if enabled %}<span class="status-dot on"></span>Enabled — checking for new PDFs every hour
       {% else %}<span class="status-dot off"></span>Paused{% endif %}
     </p>
-    {% if last_run %}<p class="kv"><b>Last check</b> {{ last_run }}</p>{% endif %}
+    <div class="row">
+      <form method="post" action="{{ url_for('away_page') }}">
+        <input type="hidden" name="action" value="toggle">
+        <button class="btn big {% if enabled %}danger{% endif %}" type="submit">
+          {% if enabled %}⏸ Disable Away mode{% else %}▶ Enable Away mode{% endif %}
+        </button>
+      </form>
+    </div>
   </section>
 
   <section class="forms">
-    <h2>Recent checks</h2>
-    {% if runs %}
+    <h2>Drive folder</h2>
+    {% if folder_id %}
+      <p class="kv"><b>Watching</b>
+        {% if folder_name %}{{ folder_name }}{% else %}Drive folder{% endif %}</p>
+      <p class="kv"><b>Link</b>
+        <a href="{{ folder_url }}" target="_blank" rel="noopener">Open in Google Drive</a></p>
+      <div class="row">
+        <form method="post" action="{{ url_for('away_page') }}">
+          <input type="hidden" name="action" value="detach">
+          <button class="btn secondary" type="submit">Detach folder</button>
+        </form>
+      </div>
+      <p class="hint">Drop PDFs into that folder — they'll be picked up on the next hourly check.</p>
+    {% else %}
+      <p class="hint">No folder attached yet. Paste a Google Drive folder link:</p>
+      <form method="post" action="{{ url_for('away_page') }}" class="row">
+        <input type="hidden" name="action" value="attach">
+        <input type="text" name="folder_link" placeholder="https://drive.google.com/drive/folders/…">
+        <button class="btn" type="submit">Attach folder</button>
+      </form>
+      <p class="hint">The watcher needs edit access to the folder so it can file
+      reports and sort PDFs into Processed / Needs attention.</p>
+    {% endif %}
+  </section>
+
+  <section class="forms">
+    <h2>How it works</h2>
+    <ol class="how">
+      <li>Attach a Drive folder and enable Away mode above.</li>
+      <li>Every hour, new PDFs in the folder are reviewed automatically.</li>
+      <li>Each file gets a CSV report in the <b>Reports</b> subfolder, then moves to
+          <b>Processed</b> (clean) or <b>Needs attention</b> (issues found).</li>
+      <li>Files the reviewer doesn't recognize are left alone.</li>
+    </ol>
+  </section>
+
+  <section class="forms">
+    <h2>Recent reviews</h2>
+    {% if recent %}
     <table class="runs">
-      <tr><th>When</th><th>Checked</th><th>Clean</th><th>Needs attention</th><th>Failed</th><th>Status</th><th>Note</th></tr>
-      {% for r in runs %}
+      <tr><th>When</th><th>File</th><th>Form</th><th>Result</th><th>Errors</th><th>Warnings</th></tr>
+      {% for r in recent %}
       <tr>
-        <td>{{ r.when }}</td><td>{{ r.checked }}</td><td>{{ r.clean }}</td>
-        <td>{{ r.attention }}</td><td>{{ r.failed }}</td>
-        <td>{% if r.status == "ok" %}<span class="ok-badge">ok</span>
-            {% elif r.status == "partial" %}<span class="err-badge">partial</span>
-            {% else %}<span class="err-badge">{{ r.status }}</span>{% endif %}</td>
-        <td class="hint">{{ r.note }}</td>
+        <td>{{ r.when }}</td><td>{{ r.filename }}</td><td>{{ r.form_name }}</td>
+        <td>{% if r.status == "PASS" %}<span class="ok-badge">PASS</span>
+            {% else %}<span class="err-badge">FAIL</span>{% endif %}</td>
+        <td>{{ r.n_errors }}</td><td>{{ r.n_warnings }}</td>
       </tr>
       {% endfor %}
     </table>
     {% else %}
-      <p class="hint">No checks yet. Enable Away mode or run a check now.</p>
+      <p class="hint">No reviews yet.</p>
     {% endif %}
   </section>
-  {% endif %}
 </main>
 </body>
 </html>

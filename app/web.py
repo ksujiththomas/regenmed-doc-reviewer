@@ -3,14 +3,14 @@ import base64
 import csv
 import io
 import os
-import threading
+import time
 import uuid
 
 import cv2
 from flask import Flask, Response, redirect, render_template, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import away, drive_client, history
+from . import history
 from .pipeline import run, ReviewError
 
 app = Flask(__name__)
@@ -319,200 +319,112 @@ def history_clear():
 
 
 # ---------------------------------------------------------------- Away mode
+#
+# The Drive watcher runs OUTSIDE this app (a scheduled job on the user's
+# assistant): it polls the attached Drive folder, sends new PDFs to
+# /api/review, and files reports. This page + /api/away/config are the
+# control plane: enable/disable and attach/detach the folder. The watcher
+# reads this config on every run, so the buttons here take effect on the
+# next check (hourly).
 
-def _oauth_flow():
-    from google_auth_oauthlib.flow import Flow
-    return Flow.from_client_config(
-        {"web": {
-            "client_id": os.environ["GOOGLE_CLIENT_ID"],
-            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token"}},
-        scopes=drive_client.SCOPES,
-        redirect_uri=url_for("drive_callback", _external=True))
+import re as _re
 
-
-@app.route("/drive/connect")
-def drive_connect():
-    if not drive_client.client_configured():
-        cfg = away.get_config()
-        return render_template(
-            "away.html", error="Google sign-in isn't configured on the "
-            "server yet (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).",
-            connected=False, oauth_ready=False, enabled=False,
-            interval_min=int(cfg.get("interval_min", 30)), runs=[])
-    flow = _oauth_flow()
-    auth_url, state = flow.authorization_url(
-        access_type="offline", prompt="consent",
-        include_granted_scopes="false")
-    away.save_config(oauth_state=state)
-    return redirect(auth_url)
+_DRIVE_FOLDER_RE = _re.compile(r"/folders/([a-zA-Z0-9_-]+)")
 
 
-@app.route("/drive/callback")
-def drive_callback():
-    cfg = away.get_config()
-    if (not request.args.get("state")
-            or request.args.get("state") != cfg.get("oauth_state")):
-        return render_template(
-            "away.html", error="Authorization didn't go through "
-            "(state mismatch). Please try connecting again.",
-            connected=False, oauth_ready=True, enabled=False,
-            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 400
-    flow = _oauth_flow()
-    try:
-        flow.fetch_token(authorization_response=request.url)
-    except Exception:
-        return redirect(url_for("drive_connect"))
-    creds = flow.credentials
-    if not creds.refresh_token:
-        return render_template(
-            "away.html", error="Google didn't return a refresh token. "
-            "Try disconnecting the app at myaccount.google.com/permissions "
-            "and connecting again.",
-            connected=False, oauth_ready=True, enabled=False,
-            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 400
-    try:
-        svc = drive_client.drive_service(creds.refresh_token)
-        email = drive_client.account_email(svc)
-    except Exception as exc:  # noqa: BLE001
-        return render_template(
-            "away.html", error=f"Could not reach Google Drive: {exc}",
-            connected=False, oauth_ready=True, enabled=False,
-            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 502
-    away.save_config(refresh_token=creds.refresh_token,
-                     account_email=email, oauth_state="")
-    return redirect(url_for("away_page"))
+def _extract_drive_folder_id(text: str):
+    m = _DRIVE_FOLDER_RE.search(text or "")
+    return m.group(1) if m else None
 
 
-@app.route("/drive/disconnect", methods=["POST"])
-def drive_disconnect():
-    away.clear_token()
-    return redirect(url_for("away_page"))
+def _away_status():
+    enabled = history.get_setting("away_enabled", "0") == "1"
+    folder_id = history.get_setting("away_folder_id", "")
+    folder_name = history.get_setting("away_folder_name", "")
+    return {
+        "enabled": enabled,
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "folder_url": (f"https://drive.google.com/drive/folders/{folder_id}"
+                       if folder_id else ""),
+    }
 
 
-def _drive_svc_or_none():
-    token = away.get_config().get("refresh_token")
-    if not token:
-        return None
-    try:
-        return drive_client.drive_service(token)
-    except Exception:  # noqa: BLE001 - expired/revoked
-        away.clear_token()
-        return None
+@app.route("/api/away/config", methods=["GET"])
+def away_config_get():
+    """Machine-readable Away-mode config (read by the Drive watcher)."""
+    from flask import jsonify
+    return jsonify(_away_status())
+
+
+@app.route("/api/away/config", methods=["POST"])
+def away_config_post():
+    """Update Away-mode config. JSON body may carry:
+    enabled (bool), folder_url (str, attach), detach (bool)."""
+    from flask import jsonify
+    data = request.get_json(force=True, silent=True) or {}
+    if "enabled" in data:
+        history.set_setting("away_enabled", "1" if data["enabled"] else "0")
+    if data.get("detach"):
+        history.set_setting("away_folder_id", "")
+        history.set_setting("away_folder_name", "")
+    elif "folder_url" in data:
+        fid = _extract_drive_folder_id(data["folder_url"])
+        if not fid:
+            return jsonify({"error":
+                            "That doesn't look like a Google Drive folder link."}), 400
+        history.set_setting("away_folder_id", fid)
+        history.set_setting("away_folder_name",
+                            data.get("folder_name", ""))
+    return jsonify(_away_status())
 
 
 @app.route("/away", methods=["GET", "POST"])
 def away_page():
-    cfg = away.get_config()
-    ctx = {
-        "connected": False,
-        "oauth_ready": drive_client.client_configured(),
-        "enabled": cfg.get("enabled") == "1",
-        "interval_min": int(cfg.get("interval_min", 30)),
-        "last_run": cfg.get("last_run", ""),
-        "watch_name": cfg.get("watch_name", ""),
-        "account_email": cfg.get("account_email", ""),
-        "runs": away.recent_runs(10),
-        "folders": [],
-        "error": None,
-        "notice": None,
-    }
+    status = _away_status()
+    error, notice = None, None
 
     if request.method == "POST":
         action = request.form.get("action", "")
-        svc = _drive_svc_or_none()
-        if action in ("setup_default", "use_folder") and svc is None:
-            ctx["error"] = "Drive connection expired — please reconnect."
-        elif action == "setup_default":
-            try:
-                root = away.setup_default_tree(svc)
-                ctx["notice"] = (f"Created '{root}' in your Drive with "
-                                 "Watch / Processed / Needs attention / Reports.")
-            except Exception as exc:  # noqa: BLE001
-                ctx["error"] = f"Could not create folders: {exc}"
-        elif action == "use_folder":
-            fid = (request.form.get("folder")
-                   or drive_client.extract_folder_id(
-                       request.form.get("folder_link", "")))
+        if action == "toggle":
+            new_on = not status["enabled"]
+            history.set_setting("away_enabled", "1" if new_on else "0")
+            status["enabled"] = new_on
+            notice = ("Away mode enabled — the next hourly check will pick up "
+                      "new PDFs." if new_on else "Away mode paused.")
+        elif action == "attach":
+            link = request.form.get("folder_link", "")
+            fid = _extract_drive_folder_id(link)
             if not fid:
-                ctx["error"] = "Pick a folder or paste a Drive folder link."
+                error = "That doesn't look like a Google Drive folder link."
             else:
-                try:
-                    name = drive_client.get_folder(svc, fid)
-                    away.setup_folders(svc, fid, name)
-                    ctx["notice"] = f"Now watching '{name}'."
-                except Exception as exc:  # noqa: BLE001
-                    ctx["error"] = f"Could not use that folder: {exc}"
-        elif action == "toggle":
-            new = "0" if ctx["enabled"] else "1"
-            away.save_config(enabled=new)
-            ctx["enabled"] = new == "1"
-            _reschedule_poll()
-            ctx["notice"] = ("Away mode enabled." if ctx["enabled"]
-                             else "Away mode paused.")
-        elif action == "interval":
-            try:
-                mins = max(5, min(240, int(
-                    request.form.get("interval_min", 30))))
-            except ValueError:
-                mins = 30
-            away.save_config(interval_min=mins)
-            ctx["interval_min"] = mins
-            _reschedule_poll()
-            ctx["notice"] = f"Will check every {mins} minutes."
-        elif action == "run_now":
-            threading.Thread(target=away.poll_drive, daemon=True).start()
-            ctx["notice"] = "Check started — refresh in a minute for results."
-        cfg = away.get_config()
-        ctx["enabled"] = cfg.get("enabled") == "1"
-        ctx["watch_name"] = cfg.get("watch_name", "")
-        ctx["last_run"] = cfg.get("last_run", "")
+                history.set_setting("away_folder_id", fid)
+                history.set_setting("away_folder_name", "")
+                status["folder_id"] = fid
+                status["folder_url"] = (f"https://drive.google.com/drive/folders/{fid}")
+                notice = "Folder attached. It will be checked on the next run."
+        elif action == "detach":
+            history.set_setting("away_folder_id", "")
+            history.set_setting("away_folder_name", "")
+            status["folder_id"] = ""
+            status["folder_name"] = ""
+            status["folder_url"] = ""
+            notice = "Folder detached. Away mode will skip checks until a folder is attached."
 
-    if away.get_config().get("refresh_token"):
-        ctx["connected"] = True
-        ctx["account_email"] = away.get_config().get("account_email", "")
-        if not ctx["watch_name"]:
-            svc = _drive_svc_or_none()
-            if svc is not None:
-                try:
-                    ctx["folders"] = drive_client.list_top_folders(svc)
-                except Exception:  # noqa: BLE001
-                    pass
-    return render_template("away.html", **ctx)
-
-
-# Scheduler: one worker only, so a single BackgroundScheduler in this process.
-_scheduler = None
-
-
-def _poll_job():
-    try:
-        away.poll_drive()
-    except Exception:  # noqa: BLE001 - last resort; per-file errors are logged
-        pass
-
-
-def _reschedule_poll():
-    if _scheduler is not None:
-        mins = int(away.get_config().get("interval_min", 30))
-        _scheduler.reschedule_job("drive_poll", trigger="interval",
-                                  minutes=mins)
-
-
-def _ensure_scheduler():
-    global _scheduler
-    if _scheduler is not None:
-        return
-    from apscheduler.schedulers.background import BackgroundScheduler
-    mins = int(away.get_config().get("interval_min", 30))
-    _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(_poll_job, "interval", minutes=mins, id="drive_poll",
-                       max_instances=1, coalesce=True)
-    _scheduler.start()
-
-
-_ensure_scheduler()
+    recent = []
+    for e in history.recent(10):
+        recent.append({
+            "when": time.strftime("%Y-%m-%d %H:%M",
+                                  time.localtime(e["reviewed_at"])),
+            "filename": e["filename"],
+            "form_name": e["form_name"],
+            "status": ("PASS" if e["n_errors"] == 0 and e["n_warnings"] == 0
+                       else "FAIL"),
+            "n_errors": e["n_errors"],
+            "n_warnings": e["n_warnings"],
+        })
+    return render_template("away.html", error=error, notice=notice,
+                           recent=recent, **status)
 
 
 if __name__ == "__main__":

@@ -66,6 +66,26 @@ def set_enabled(on: bool):
         c.close()
 
 
+def get_setting(key: str, default: str = "") -> str:
+    c = _conn()
+    try:
+        row = c.execute("SELECT value FROM settings WHERE key=?",
+                        (key,)).fetchone()
+        return row[0] if row else default
+    finally:
+        c.close()
+
+
+def set_setting(key: str, value: str):
+    c = _conn()
+    try:
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                  (key, value))
+        c.commit()
+    finally:
+        c.close()
+
+
 def find(sha: str):
     """Return the previous review record for these exact file bytes, or None."""
     c = _conn()
