@@ -145,7 +145,9 @@ def _batch_report(files):
 
     def process_one(args):
         idx, filename, pdf_bytes = args
-        already = _dup_check(pdf_bytes, filename)
+        # hash BEFORE processing: pdf_bytes is freed in finally below
+        sha = history.sha256_hex(pdf_bytes) if history.is_enabled() else None
+        already = history.find(sha) if sha else None
         try:
             r = run(pdf_bytes, annotate_pages=False)
         except ReviewError as exc:
@@ -165,8 +167,9 @@ def _batch_report(files):
         issues = r["issues"]
         errors = [i for i in issues if i["severity"] == "error"]
         warnings = [i for i in issues if i["severity"] == "warning"]
-        _log_review(pdf_bytes, filename, r["form_code"], r["form_name"],
-                    len(errors), len(warnings))
+        if sha:
+            history.record(sha, filename, r["form_code"], r["form_name"],
+                           len(errors), len(warnings))
         return idx, {
             "filename": filename,
             "ok": True,

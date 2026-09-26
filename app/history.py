@@ -17,7 +17,8 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def _conn():
-    c = sqlite3.connect(DB_PATH)
+    # timeout=30: batch worker threads may briefly contend on writes
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.execute("""CREATE TABLE IF NOT EXISTS reviews(
         sha256 TEXT PRIMARY KEY,
         filename TEXT, form_code TEXT, form_name TEXT,
