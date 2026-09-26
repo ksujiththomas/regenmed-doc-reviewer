@@ -45,7 +45,8 @@ def check_date_zone(img, box, field, page=0):
     H, W = img.shape[:2]
     x0, y0, x1, y1 = [int(v) for v in (box[0] * W, box[1] * H, box[2] * W, box[3] * H)]
     c = img[y0:y1, x0:x1]
-    _, b = cv2.threshold(c, 175, 255, cv2.THRESH_BINARY_INV)
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    _, b = cv2.threshold(gray, 175, 255, cv2.THRESH_BINARY_INV)
     b = cv2.morphologyEx(b, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     n, _, stats, _ = cv2.connectedComponentsWithStats(b, 8)
     comps = sum(1 for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 25)
@@ -102,22 +103,77 @@ def _find_frfd_centers(img):
 def _qty_cell_filled(img, yc, x0f, x1f):
     """Is a # Produced / # Packaged cell filled?
 
-    Handwritten values sit low in the cell, so scan a tall window below the
-    FRZ/FD center; grid-line rows (dark across the full cell width) are
-    excluded from the measurement.
+    The FRZ/FD print center (yc) anchors a fixed window covering the cell
+    interior; grid-line halo rows are excluded. A cell counts as filled if
+    it contains a coherent ink stroke (a handwritten digit is >=6px tall at
+    200dpi; grid-line residue forms flat fragments <=2px tall).
     """
     H, W = img.shape[:2]
     gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    x0, x1 = int(x0f * W), int(x1f * W)
-    y0, y1 = int((yc + 0.002) * H), int((yc + 0.016) * H)
+    x0, x1 = int((x0f + 0.010) * W), int((x1f - 0.010) * W)
+    y0, y1 = int((yc - 0.007) * H), int((yc + 0.007) * H)
     c = gray[y0:y1, x0:x1]
     if c.size == 0:
         return False
-    rowfrac = (c < 200).mean(axis=1)
+    dark = (c < 200)
+    rowfrac = dark.mean(axis=1)
     keep = rowfrac < 0.35
     if keep.sum() < 3:
         return False
-    return float((c[keep] < 200).mean()) > 0.02
+    m = np.where(dark[keep], 255, 0).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_HEIGHT] >= 6:
+            return True
+    return False
+
+
+def _has_initials(img, box):
+    """Do initials (a handwritten stroke) appear in the box?
+
+    Line-aware: vertical/horizontal grid-line fragments are ignored, so
+    neighboring cells' dividers or spillover don't count.
+    """
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = (int(box[0] * W), int(box[1] * H),
+                      int(box[2] * W), int(box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    dark = np.where(gray < 200, 255, 0).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    for i in range(1, n):
+        a, hh, ww = (stats[i, cv2.CC_STAT_AREA], stats[i, cv2.CC_STAT_HEIGHT],
+                     stats[i, cv2.CC_STAT_WIDTH])
+        if ww <= 4 and hh >= 12:
+            continue  # vertical divider/fragment
+        if hh <= 4 and ww >= 12:
+            continue  # horizontal line fragment
+        if hh >= c.shape[0] * 0.85 or ww >= c.shape[1] * 0.85:
+            continue  # spans the box: a rule line, not handwriting
+        if hh >= 10:
+            return True
+    return False
+
+
+def _date_dashes(img, box):
+    """X-positions of dash-like components (the '-' in MM-DD-YY dates)."""
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = (int(box[0] * W), int(box[1] * H),
+                      int(box[2] * W), int(box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return []
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    dark = np.where(gray < 200, 255, 0).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    out = []
+    for i in range(1, n):
+        wpx, hpx = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        if 8 <= wpx <= 30 and hpx <= 7 and wpx >= 2 * hpx:
+            out.append(stats[i, cv2.CC_STAT_LEFT] / W + box[0])
+    return sorted(out)
 
 
 # ------------------------------------------------------------- MP-F-023
@@ -133,7 +189,7 @@ def check_mp_f023(pages):
             cx0, cx1, ix0, ix1 = t["stacked_cells"][label]
             top, mid, bot = t["by_date_split"]
             ibox, dbox = (ix0, top, ix1, mid), (cx0, mid, cx1, bot)
-            if not is_filled(img, ibox):
+            if not _has_initials(img, ibox):
                 issues.append(_issue("error", f"{label} — By (initials)",
                                      "Initials are missing.", ibox))
             issues.extend(check_date_zone(img, dbox, f"{label} — Date"))
@@ -153,32 +209,41 @@ def check_mp_f023(pages):
         issues.append(_issue("error", "Verified By",
                              "Verified By initials are blank.", vbox))
 
-    # Operations Manager Review: needs initials AND date.
-    # The two are written side-by-side; require ink spanning a wide x-range
-    # with at least two separated clusters.
+    # Operations Manager Review: needs initials AND date ("Initials / Date").
+    # The date's dashes anchor the search: initials must appear as a
+    # handwritten stroke in the zone left of the first dash. A date alone
+    # (with its separated digits) must not pass as "initials + date".
     obox = t["ops_review_box"]
-    n = count_x_clusters(img, obox)
-    span = _ink_x_span(img, obox)
-    if n == 0:
-        issues.append(_issue("error", "Operations Manager Review",
-                             "Review initials/date are missing.", obox))
-    elif n < 2 or span < t["ops_review_min_span"]:
-        issues.append(_issue("warning", "Operations Manager Review",
-                             "Only one entry found — initials and date are both required.",
-                             obox))
+    dashes = _date_dashes(img, obox)
+    if not dashes:
+        n = count_x_clusters(img, obox)
+        if n == 0:
+            issues.append(_issue("error", "Operations Manager Review",
+                                 "Review initials/date are missing.", obox))
+        else:
+            issues.append(_issue("warning", "Operations Manager Review",
+                                 "Review entry is unclear — verify initials and date are both present.",
+                                 obox))
+    else:
+        ibox = (0.535, obox[1], min(dashes) - 0.020, obox[3])
+        if not _has_initials(img, ibox):
+            issues.append(_issue("error", "Operations Manager Review",
+                                 "Review initials are missing (date present, initials blank).",
+                                 ibox))
 
     # Tissue rows: for white (non-shaded) cells, a listed tissue needs
     # BOTH # Produced and # Packaged filled. Shaded cells are N/A by design.
     # Tissue names are pre-printed, so the 17 data rows are located via the
-    # printed FRZ/FD text (blank spacer rows have none).
+    # printed FRZ/FD text (blank spacer rows have none). Column edges measured
+    # from the printed grid: produced 0.475-0.578, packaged 0.578-0.681.
     row_centers = _find_frfd_centers(img) or t["frfd_fallback_centers"]
     for i, yc in enumerate(row_centers):
         label = t["tissue_names"][i] if i < len(t["tissue_names"]) else f"Tissue row {i + 1}"
-        pbox = (0.515, yc + 0.002, 0.605, yc + 0.016)
-        kbox = (0.635, yc + 0.002, 0.705, yc + 0.016)
-        if not _qty_cell_filled(img, yc, 0.515, 0.605) and not _is_shaded(img, pbox):
+        pbox = (0.475 + 0.010, yc - 0.007, 0.578 - 0.010, yc + 0.007)
+        kbox = (0.578 + 0.010, yc - 0.007, 0.681 - 0.010, yc + 0.007)
+        if not _qty_cell_filled(img, yc, 0.475, 0.578) and not _is_shaded(img, pbox):
             issues.append(_issue("error", label, "# Produced is blank.", pbox))
-        if not _qty_cell_filled(img, yc, 0.635, 0.705) and not _is_shaded(img, kbox):
+        if not _qty_cell_filled(img, yc, 0.578, 0.681) and not _is_shaded(img, kbox):
             issues.append(_issue("error", label, "# Packaged is blank.", kbox))
     return issues
 

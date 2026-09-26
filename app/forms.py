@@ -31,25 +31,29 @@ MP_F_023 = {
     "verified_by_box": (0.10, 0.118, 0.16, 0.148),
     # stacked By/Date cells: (top, mid, bottom). Writers often sign high,
     # overlapping the printed label (which ends ~y 0.112), so the initials
-    # zone starts at 0.115.
-    "by_date_split": (0.115, 0.133, 0.15),
+    # zone starts at 0.115. Mid is 0.130 to keep the date's digit tops out
+    # of the initials zone.
+    "by_date_split": (0.115, 0.130, 0.15),
     # writers also spill across the column divider (e.g. "MW" written over the
     # Clean Room Log | Tissue Checked In boundary), so each cell's initials
     # zone extends slightly into its neighbour: (cell_x0, cell_x1, ibox_x0, ibox_x1)
     "stacked_cells": {
-        "Clean Room Log": (0.78, 0.88, 0.78, 0.885),
+        # (cell_x0, cell_x1, initials_x0, initials_x1); initials zone is the
+        # upper part of the cell (by_date_split). Clean Room Log's initials
+        # zone is capped at 0.855 so the Tissue Checked In "MW" spilling
+        # left across the divider isn't mistaken for its own initials.
+        "Clean Room Log": (0.78, 0.88, 0.775, 0.855),
         "Tissue Checked In": (0.88, 0.97, 0.855, 0.97),
     },
     "date_fields": ["Date of Recovery", "Date of Processing"],
     "ops_review_box": (0.54, 0.455, 0.92, 0.472),
-    "ops_review_min_span": 0.09,  # ink x-span fraction needed for initials+date
     "tissue_cols": {
         "name": (0.04, 0.32),
-        "produced": (0.50, 0.62),
-        "packaged": (0.62, 0.72),
+        "produced": (0.475, 0.578),
+        "packaged": (0.578, 0.681),
     },
-    "produced_inset": (0.51, 0.61),
-    "packaged_inset": (0.63, 0.71),
+    "produced_inset": (0.485, 0.568),
+    "packaged_inset": (0.588, 0.671),
     # Fallback FRZ/FD row centers if dynamic detection fails (fractional y).
     "frfd_fallback_centers": [
         0.4970, 0.5134, 0.5291, 0.5450, 0.5611, 0.5934, 0.6257, 0.6411, 0.6736,
