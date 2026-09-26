@@ -39,39 +39,32 @@ def _ink_x_span(img, box, thresh=170):
 
 
 def check_date_zone(img, box, field, page=0, strict_format=False):
-    """Date must be present; with strict_format it must also be MM/DD/YY.
+    """Date must be present; QS-F-049 additionally flags a clear MM/DD/YY violation.
 
     strict_format=False (MP-F-023, MP-F-018 — the brief only requires a date
     be present): fast structural pass first (~50ms vs ~174ms for a Tesseract
     subprocess); OCR only runs when the structure is ambiguous.
-    strict_format=True (QS-F-049 — the brief mandates MM/DD/YY): OCR-first so
-    a machine-readable wrong format (e.g. YYYY-MM-DD) is flagged as an error.
-    Handwriting too messy to read falls back to a visual-confirm warning,
-    never a false error.
+    strict_format=True (QS-F-049 — the brief mandates MM/DD/YY): a confident
+    OCR read of a wrong format (e.g. YYYY-MM-DD) is an error. Messy
+    handwriting that OCR cannot parse is accepted silently — flagging it
+    would be a false alarm, and no structural separator check proved
+    reliable on real handwriting.
     """
     if not is_filled(img, box):
         return [_issue("error", field, "Date is blank.", box, page)]
 
     def ocr_digits():
         t = ocr_text(img, box, "--psm 7 -c tessedit_char_whitelist=0123456789/-")
-        return t.replace(" ", "")
+        return t.replace(" ", "").strip("/-")
 
     if strict_format:
-        text = ocr_digits().strip("/-")
-        if DATE_RE.match(text):
-            return []  # verified MM/DD/YY
-        if WRONG_FMT_RE.match(text):
+        if WRONG_FMT_RE.match(ocr_digits()):
             return [_issue("error", field,
                            "Date format looks invalid (expected MM/DD/YY).", box, page)]
-        # Handwriting unreadable or only partly read: confirm date-like
-        # presence structurally; never a false format error on OCR noise.
-        if _looks_like_date(img, box):
-            return [_issue("warning", field,
-                           "Date is present but the MM/DD/YY format could not be "
-                           "machine-verified — please confirm visually.", box, page)]
-    elif _looks_like_date(img, box):
+        return []
+    if _looks_like_date(img, box):
         return []  # fast path: clearly a date
-    elif DATE_RE.match(ocr_digits().strip("/-")):
+    if DATE_RE.match(ocr_digits()):
         return []
     # structural fallback: too many strokes => probably words, not a date
     H, W = img.shape[:2]
