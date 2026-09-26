@@ -22,7 +22,13 @@ MP_F_023 = {
         "Tissue Checked In": (0.88, 0.97),
     },
     "header_value_y": (0.12, 0.15),
-    "donor_label_box": (0.04, 0.08, 0.16, 0.10),  # Donor # lives in label row
+    # Donor # value is handwritten right of the printed label; the value zone
+    # excludes the printed "Donor #" text (which would otherwise make the
+    # blank check vacuous).
+    "donor_value_box": (0.095, 0.078, 0.16, 0.102),
+    # "Verified By" cell under Donor #: initials required; zone excludes the
+    # printed label at left.
+    "verified_by_box": (0.10, 0.118, 0.16, 0.148),
     # stacked By/Date cells: (top, mid, bottom). Writers often sign high,
     # overlapping the printed label (which ends ~y 0.112), so the initials
     # zone starts at 0.115.

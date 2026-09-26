@@ -75,14 +75,20 @@ def check_mp_f023(pages):
                                      "Initials are missing.", ibox))
             issues.extend(check_date_zone(img, dbox, f"{label} — Date"))
         elif label == "Donor #":
-            vbox = (cx0, y0, cx1, y1)
-            if not (is_filled(img, t["donor_label_box"]) or is_filled(img, vbox)):
+            vbox = t["donor_value_box"]
+            if not is_filled(img, vbox):
                 issues.append(_issue("error", "Donor #", "Donor # is blank.", vbox))
         else:
             if not is_filled(img, box):
                 issues.append(_issue("error", label, f"{label} is blank.", box))
             elif label in t["date_fields"]:
                 issues.extend(check_date_zone(img, box, label))
+
+    # "Verified By" cell under Donor #: part of the required header block.
+    vbox = t["verified_by_box"]
+    if not is_filled(img, vbox):
+        issues.append(_issue("error", "Verified By",
+                             "Verified By initials are blank.", vbox))
 
     # Operations Manager Review: needs initials AND date.
     # The two are written side-by-side; require ink spanning a wide x-range
@@ -258,14 +264,16 @@ def check_lot_log(pages):
             if not is_filled(img2, ibox):
                 continue
             voided = _struck_through(img2, (spec["item"][0], y0, spec["item"][1], y1))
-            for box, label in ((lbox, "Load #"), (dbox, "Sterilization Date")):
-                if not is_filled(img2, box):
-                    sev = "warning" if voided else "error"
-                    msg = (f"Item is listed but {label} is blank."
-                           + (" Row appears struck-through — confirm it was intentionally voided."
-                              if voided else ""))
-                    issues.append(_issue(sev, f"Lot Log p2 {side} row {r + 1} — {label}",
-                                         msg, box, 1))
+            # rule: "Load # or Sterilization Date must not be left blank" --
+            # at least one of the two must be present (same OR-logic as the
+            # "Lot or Qty Used" rules elsewhere).
+            if not (is_filled(img2, lbox) or is_filled(img2, dbox)):
+                sev = "warning" if voided else "error"
+                msg = ("Item is listed but both Load # and Sterilization Date are blank."
+                       + (" Row appears struck-through — confirm it was intentionally voided."
+                          if voided else ""))
+                issues.append(_issue(sev, f"Lot Log p2 {side} row {r + 1} — Load # / Date",
+                                     msg, (lbox[0], y0, dbox[2], y1), 1))
 
     check_ster_table(t["p2_left"], "left")
     check_ster_table(t["p2_right"], "right")
