@@ -41,6 +41,11 @@ def check_date_zone(img, box, field, page=0):
     text = text.replace(" ", "")
     if DATE_RE.match(text):
         return []
+    # OCR often fails on handwriting. Structural fallback: a valid date
+    # is a wide ink region with multiple digit-sized components. If the
+    # structure looks date-like, accept it without a warning.
+    if _looks_like_date(img, box):
+        return []
     # structural fallback: too many strokes => probably words, not a date
     H, W = img.shape[:2]
     x0, y0, x1, y1 = [int(v) for v in (box[0] * W, box[1] * H, box[2] * W, box[3] * H)]
@@ -56,6 +61,37 @@ def check_date_zone(img, box, field, page=0):
     return [_issue("warning", field,
                    "Date is present but the MM/DD/YY format could not be "
                    "machine-verified — please confirm visually.", box, page)]
+
+
+def _looks_like_date(img, box):
+    """Structural check: does the ink in box look like a handwritten date?
+    A date (MM-DD-YY) is a wide region with several digit-sized blobs.
+    Grid lines are removed morphologically first.
+    """
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = [int(v) for v in (box[0] * W, box[1] * H, box[2] * W, box[3] * H)]
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    _, b = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    # remove grid lines
+    hkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    vkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    lines = cv2.morphologyEx(b, cv2.MORPH_OPEN, hkernel)
+    lines = cv2.bitwise_or(lines, cv2.morphologyEx(b, cv2.MORPH_OPEN, vkernel))
+    ink = cv2.bitwise_and(b, cv2.bitwise_not(lines))
+    # must be wide (dates are wider than tall)
+    ys, xs = np.where(ink > 0)
+    if len(xs) < 50:
+        return False
+    wpx, hpx = xs.max() - xs.min(), ys.max() - ys.min()
+    if wpx < 1.2 * hpx:
+        return False  # not wide enough for a date
+    # must have several digit-sized components (not a single scribble)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    comps = sum(1 for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 15)
+    return 4 <= comps <= 20
 
 
 def _is_shaded(img, box):
@@ -298,7 +334,11 @@ def check_qs_f049(pages):
             ini = _has_handwriting(img, (sbox[0], sbox[1], sbox[2], ibox[3]))
             dat = _has_handwriting(img, (sbox[0], dbox[1], sbox[2], sbox[3]))
             if ini and dat:
-                issues.extend(check_date_zone(img, dbox, f"{field} date"))
+                # Use the expanded date zone for format verification:
+                # handwriting often spills outside the printed cell, and a
+                # narrow crop cuts off digits so OCR fails.
+                wide_dbox = (sbox[0], dbox[1], sbox[2], sbox[3])
+                issues.extend(check_date_zone(img, wide_dbox, f"{field} date"))
             elif not ini and not dat:
                 issues.append(_issue("error", field,
                                      "Both initials and date are blank.", cell))
