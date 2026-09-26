@@ -60,6 +60,15 @@
       <li>Tissue Discard Form</li>
     </ul>
   </section>
+
+  <section class="forms logbox">
+    <h2>Review log</h2>
+    <p class="sub" style="margin-bottom:8px">
+      {{ log_count }} file(s) logged.
+      {% if log_enabled %}Duplicate uploads are flagged automatically.{% else %}Logging is off.{% endif %}
+      <a href="{{ url_for('history_page') }}">View log</a>
+    </p>
+  </section>
 </main>
 <script>
 (function () {

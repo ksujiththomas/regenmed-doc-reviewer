@@ -1,15 +1,21 @@
 """Flask web app: upload a processing-form PDF, get a validation report."""
 import base64
+import csv
 import io
 import os
+import uuid
 
 import cv2
-from flask import Flask, render_template, request
+from flask import Flask, Response, redirect, render_template, request, url_for
 
-from .pipeline import run
+from . import history
+from .pipeline import run, ReviewError
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 160 * 1024 * 1024  # 10 files x 15 MB + overhead
+
+# In-memory cache of batch results for CSV download (ephemeral, fine).
+BATCH_CACHE = {}
 
 
 @app.errorhandler(413)
@@ -17,6 +23,12 @@ def too_large(_):
     return render_template("index.html",
                            error="Total upload is too large — please keep it under "
                                  "150 MB (max 10 files, 15 MB each)."), 413
+
+
+@app.context_processor
+def inject_log_state():
+    return {"log_enabled": history.is_enabled(),
+            "log_count": history.count()}
 
 
 def _img_to_data_uri(bgr_img):
@@ -29,6 +41,24 @@ def _img_to_data_uri(bgr_img):
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+
+def _dup_check(pdf_bytes, filename):
+    """Return prior review record if these exact bytes were seen before."""
+    if not history.is_enabled():
+        return None
+    rec = history.find(history.sha256_hex(pdf_bytes))
+    if rec:
+        from datetime import datetime
+        rec["when"] = datetime.fromtimestamp(rec["reviewed_at"]).strftime(
+            "%Y-%m-%d %H:%M")
+    return rec
+
+
+def _log_review(pdf_bytes, filename, form_code, form_name, n_errors, n_warnings):
+    if history.is_enabled():
+        history.record(history.sha256_hex(pdf_bytes), filename,
+                       form_code, form_name, n_errors, n_warnings)
 
 
 @app.route("/review", methods=["POST"])
@@ -63,11 +93,15 @@ def review():
 
 def _single_report(f):
     pdf_bytes = f.read()
+    already = _dup_check(pdf_bytes, f.filename)
     try:
         result = run(pdf_bytes)
-    except Exception as exc:  # noqa: BLE001 - show friendly error
+    except ReviewError as exc:
+        return render_template("index.html", error=str(exc))
+    except Exception:  # noqa: BLE001 - never leak internals to the user
         return render_template("index.html",
-                               error=f"Could not process that PDF ({exc}).")
+                               error="Something went wrong processing that PDF. "
+                                     "Please try again or use a different file.")
     if result["form_code"] is None:
         return render_template("index.html", error=result["note"]
                                or "Could not identify the form type.")
@@ -75,6 +109,8 @@ def _single_report(f):
     issues = result["issues"]
     errors = [i for i in issues if i["severity"] == "error"]
     warnings = [i for i in issues if i["severity"] == "warning"]
+    _log_review(pdf_bytes, f.filename, result["form_code"], result["form_name"],
+                len(errors), len(warnings))
     pages = []
     for i, ann in enumerate(result["annotated"]):
         # downscale for the browser; keep aspect
@@ -93,6 +129,7 @@ def _single_report(f):
         warnings=warnings,
         passed=(len(issues) == 0),
         pages=pages,
+        already=already,
     )
 
 
@@ -108,20 +145,28 @@ def _batch_report(files):
 
     def process_one(args):
         idx, filename, pdf_bytes = args
+        already = _dup_check(pdf_bytes, filename)
         try:
-            r = run(pdf_bytes)
-        except Exception as exc:  # noqa: BLE001
+            r = run(pdf_bytes, annotate_pages=False)
+        except ReviewError as exc:
+            return idx, {"filename": filename, "ok": False, "error": str(exc),
+                         "already": already}
+        except Exception:  # noqa: BLE001 - one bad file must not kill the batch
             return idx, {"filename": filename, "ok": False,
-                         "error": f"Could not process ({exc})."}
+                         "error": "Something went wrong processing this file.",
+                         "already": already}
         finally:
             del pdf_bytes
             gc.collect()
         if r["form_code"] is None:
             return idx, {"filename": filename, "ok": False,
-                         "error": r["note"] or "Could not identify the form type."}
+                         "error": r["note"] or "Could not identify the form type.",
+                         "already": already}
         issues = r["issues"]
         errors = [i for i in issues if i["severity"] == "error"]
         warnings = [i for i in issues if i["severity"] == "warning"]
+        _log_review(pdf_bytes, filename, r["form_code"], r["form_name"],
+                    len(errors), len(warnings))
         return idx, {
             "filename": filename,
             "ok": True,
@@ -132,6 +177,7 @@ def _batch_report(files):
             "passed": len(issues) == 0,
             "errors": errors,
             "warnings": warnings,
+            "already": already,
         }
 
     payloads = [(i, f.filename, f.read()) for i, f in enumerate(files)]
@@ -141,8 +187,62 @@ def _batch_report(files):
             results[idx] = res
     gc.collect()
     n_passed = sum(1 for r in results if r.get("passed"))
+    token = uuid.uuid4().hex
+    BATCH_CACHE[token] = results
+    # keep the cache small
+    while len(BATCH_CACHE) > 20:
+        BATCH_CACHE.pop(next(iter(BATCH_CACHE)))
     return render_template("batch.html", results=results, n_files=len(results),
-                           n_passed=n_passed)
+                           n_passed=n_passed, csv_token=token)
+
+
+@app.route("/report/<token>.csv")
+def batch_csv(token):
+    results = BATCH_CACHE.get(token)
+    if not results:
+        return render_template("index.html",
+                               error="That report has expired — please re-upload."), 410
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["filename", "form", "status", "severity", "field", "message"])
+    for r in results:
+        if not r.get("ok"):
+            w.writerow([r["filename"], "", "error", "", "",
+                        r.get("error", "")])
+            continue
+        status = "PASS" if r["passed"] else "FAIL"
+        issues = r["errors"] + r["warnings"]
+        if not issues:
+            w.writerow([r["filename"], r["form_name"], status, "", "", ""])
+        for iss in issues:
+            w.writerow([r["filename"], r["form_name"], status,
+                        iss["severity"], iss["field"], iss["message"]])
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition":
+                             "attachment; filename=regenmed-review-report.csv"})
+
+
+@app.route("/history")
+def history_page():
+    from datetime import datetime
+    entries = history.recent(100)
+    for e in entries:
+        e["when"] = datetime.fromtimestamp(e["reviewed_at"]).strftime(
+            "%Y-%m-%d %H:%M")
+    return render_template("history.html", entries=entries,
+                           log_enabled=history.is_enabled())
+
+
+@app.route("/history/toggle", methods=["POST"])
+def history_toggle():
+    history.set_enabled(not history.is_enabled())
+    return redirect(url_for("history_page"))
+
+
+@app.route("/history/clear", methods=["POST"])
+def history_clear():
+    history.clear()
+    return redirect(url_for("history_page"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review log — RegenMed Document Reviewer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <p class="crumb"><a href="{{ url_for('index') }}">&larr; Back</a></p>
+    <h1>Review log</h1>
+    <p class="sub">Files are matched by content hash — re-uploading the exact same
+    file is flagged as a duplicate instead of being silently re-processed.</p>
+  </header>
+
+  <div class="log-controls">
+    <form action="{{ url_for('history_toggle') }}" method="post" style="display:inline">
+      <button type="submit" class="{{ '' if log_enabled else 'off' }}">
+        {{ 'Logging: ON' if log_enabled else 'Logging: OFF' }}
+      </button>
+    </form>
+    <form action="{{ url_for('history_clear') }}" method="post" style="display:inline"
+          onsubmit="return confirm('Clear the entire review log?');">
+      <button type="submit" class="danger">Clear log</button>
+    </form>
+  </div>
+
+  {% if entries %}
+  <table class="batch">
+    <thead>
+      <tr><th>File</th><th>Form</th><th>Result</th><th>Reviewed</th></tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>{{ e.filename }}</td>
+        <td>{{ e.form_code or '—' }}</td>
+        <td>
+          {% if e.n_errors %}<span class="badge err">{{ e.n_errors }} err</span>{% endif %}
+          {% if e.n_warnings %}<span class="badge warn">{{ e.n_warnings }} warn</span>{% endif %}
+          {% if not e.n_errors and not e.n_warnings %}<span class="badge ok">pass</span>{% endif %}
+        </td>
+        <td class="muted">{{ e.when }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No files logged yet.</p>
+  {% endif %}
+</main>
+</body>
+</html>

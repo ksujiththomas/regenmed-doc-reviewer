@@ -14,6 +14,11 @@
     <p class="sub">Detected form: <strong>{{ form_code }}</strong> &middot; Source file: {{ filename }}</p>
   </header>
 
+  {% if already %}
+  <div class="dup-banner">↻ This exact file was already reviewed on {{ already.when }}
+    ({{ already.n_errors }} error(s), {{ already.n_warnings }} warning(s) then).</div>
+  {% endif %}
+
   {% if passed %}
   <div class="pass">✓ All required fields are present and consistent. No issues found.</div>
   {% else %}

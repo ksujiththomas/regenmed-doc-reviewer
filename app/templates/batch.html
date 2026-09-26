@@ -13,6 +13,10 @@
     <p class="sub">{{ n_files }} file(s) reviewed — {{ n_passed }} passed with no issues.</p>
   </header>
 
+  <div class="actions">
+    <a class="btn" href="{{ url_for('batch_csv', token=csv_token) }}">⬇ Download CSV report</a>
+  </div>
+
   <table class="batch">
     <thead>
       <tr>
@@ -26,7 +30,11 @@
     <tbody>
       {% for r in results %}
       <tr class="{{ 'pass' if r.get('passed') else 'fail' }}">
-        <td>{{ r.filename }}</td>
+        <td>{{ r.filename }}
+          {% if r.get('already') %}
+          <br><span class="dup">↻ already reviewed {{ r.already.when }}</span>
+          {% endif %}
+        </td>
         <td>
           {% if r.ok %}
             {{ r.form_code }} — {{ r.form_name }}
