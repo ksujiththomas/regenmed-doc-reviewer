@@ -66,6 +66,33 @@ def set_enabled(on: bool):
         c.close()
 
 
+def seed_away_from_env():
+    """Seed away-mode settings from env vars on a fresh DB.
+
+    Render's ephemeral filesystem wipes sqlite on every deploy; env vars
+    survive. On startup, fill any ABSENT away_* keys from AWAY_ENABLED /
+    AWAY_FOLDER_ID / AWAY_FOLDER_NAME. Never overrides values set at
+    runtime via the /away page or API. INSERT OR IGNORE keeps it safe
+    under gunicorn's multiple workers.
+    """
+    import os
+    raw_enabled = os.environ.get("AWAY_ENABLED", "").strip().lower()
+    defaults = {
+        "away_enabled": "1" if raw_enabled in ("1", "true", "yes", "on") else "",
+        "away_folder_id": os.environ.get("AWAY_FOLDER_ID", "").strip(),
+        "away_folder_name": os.environ.get("AWAY_FOLDER_NAME", "").strip(),
+    }
+    c = _conn()
+    try:
+        for key, val in defaults.items():
+            if val:
+                c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
+                          (key, val))
+        c.commit()
+    finally:
+        c.close()
+
+
 def get_setting(key: str, default: str = "") -> str:
     c = _conn()
     try:

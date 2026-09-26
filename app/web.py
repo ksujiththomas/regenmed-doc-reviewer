@@ -19,6 +19,12 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config["MAX_CONTENT_LENGTH"] = 160 * 1024 * 1024  # 10 files x 15 MB + overhead
 
+# Away-mode config lives in sqlite, which Render wipes on every deploy.
+# Re-seed absent keys from AWAY_* env vars so a fresh deploy comes back
+# with the user's folder attached and mode enabled (never overrides
+# values set at runtime).
+history.seed_away_from_env()
+
 # In-memory cache of batch results for CSV download (ephemeral, fine).
 BATCH_CACHE = {}
 
