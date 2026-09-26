@@ -143,11 +143,30 @@ def _batch_report(files):
     import gc
     from concurrent.futures import ThreadPoolExecutor
 
+    payloads = [(i, f.filename, f.read()) for i, f in enumerate(files)]
+
+    # All sqlite access stays in the MAIN thread: concurrent writes from
+    # worker threads can stall on some filesystems (Render). Workers only
+    # run the pipeline; hashing / dup-check / record happen here.
+    log_on = history.is_enabled()
+    shas, alreadys = [], []
+    for _, filename, pdf_bytes in payloads:
+        if log_on:
+            sha = history.sha256_hex(pdf_bytes)
+            shas.append(sha)
+            rec = history.find(sha)
+            if rec:
+                from datetime import datetime
+                rec["when"] = datetime.fromtimestamp(
+                    rec["reviewed_at"]).strftime("%Y-%m-%d %H:%M")
+            alreadys.append(rec)
+        else:
+            shas.append(None)
+            alreadys.append(None)
+
     def process_one(args):
         idx, filename, pdf_bytes = args
-        # hash BEFORE processing: pdf_bytes is freed in finally below
-        sha = history.sha256_hex(pdf_bytes) if history.is_enabled() else None
-        already = history.find(sha) if sha else None
+        already = alreadys[idx]
         try:
             r = run(pdf_bytes, annotate_pages=False)
         except ReviewError as exc:
@@ -167,9 +186,6 @@ def _batch_report(files):
         issues = r["issues"]
         errors = [i for i in issues if i["severity"] == "error"]
         warnings = [i for i in issues if i["severity"] == "warning"]
-        if sha:
-            history.record(sha, filename, r["form_code"], r["form_name"],
-                           len(errors), len(warnings))
         return idx, {
             "filename": filename,
             "ok": True,
@@ -181,14 +197,20 @@ def _batch_report(files):
             "errors": errors,
             "warnings": warnings,
             "already": already,
+            "_sha": shas[idx],
         }
 
-    payloads = [(i, f.filename, f.read()) for i, f in enumerate(files)]
     results = [None] * len(payloads)
     with ThreadPoolExecutor(max_workers=min(2, len(payloads))) as ex:
         for idx, res in ex.map(process_one, payloads):
             results[idx] = res
     gc.collect()
+    if log_on:
+        for res in results:
+            if res.get("ok") and res.get("_sha"):
+                history.record(res["_sha"], res["filename"], res["form_code"],
+                               res["form_name"], res["n_errors"], res["n_warnings"])
+            res.pop("_sha", None)
     n_passed = sum(1 for r in results if r.get("passed"))
     token = uuid.uuid4().hex
     BATCH_CACHE[token] = results
