@@ -33,21 +33,39 @@ def _ink_x_span(img, box, thresh=170):
     return float(ink_cols[-1] - ink_cols[0]) / Wfull  # fraction of page width
 
 
-def check_date_zone(img, box, field, page=0):
-    """Date must be present and in MM/DD/YY (or MM-DD-YY) shape.
+def check_date_zone(img, box, field, page=0, strict_format=False):
+    """Date must be present; with strict_format it must also be MM/DD/YY.
 
-    Fast path first: structural check (wide ink, digit-sized components)
-    is ~50ms vs ~174ms for a Tesseract subprocess. OCR only runs when
-    the structure is ambiguous.
+    strict_format=False (MP-F-023, MP-F-018 — the brief only requires a date
+    be present): fast structural pass first (~50ms vs ~174ms for a Tesseract
+    subprocess); OCR only runs when the structure is ambiguous.
+    strict_format=True (QS-F-049 — the brief mandates MM/DD/YY): OCR-first so
+    a machine-readable wrong format (e.g. YYYY-MM-DD) is flagged as an error.
+    Handwriting too messy to read falls back to a visual-confirm warning,
+    never a false error.
     """
     if not is_filled(img, box):
         return [_issue("error", field, "Date is blank.", box, page)]
-    # Fast structural pass: if it clearly looks like a date, accept.
-    if _looks_like_date(img, box):
-        return []
-    text = ocr_text(img, box, "--psm 7 -c tessedit_char_whitelist=0123456789/-")
-    text = text.replace(" ", "")
-    if DATE_RE.match(text):
+
+    def ocr_digits():
+        t = ocr_text(img, box, "--psm 7 -c tessedit_char_whitelist=0123456789/-")
+        return t.replace(" ", "")
+
+    if strict_format:
+        text = ocr_digits()
+        if DATE_RE.match(text):
+            return []  # verified MM/DD/YY
+        if re.search(r"\d", text):
+            return [_issue("error", field,
+                           "Date format looks invalid (expected MM/DD/YY).", box, page)]
+        # Handwriting unreadable: confirm date-like presence structurally.
+        if _looks_like_date(img, box):
+            return [_issue("warning", field,
+                           "Date is present but the MM/DD/YY format could not be "
+                           "machine-verified — please confirm visually.", box, page)]
+    elif _looks_like_date(img, box):
+        return []  # fast path: clearly a date
+    elif DATE_RE.match(ocr_digits()):
         return []
     # structural fallback: too many strokes => probably words, not a date
     H, W = img.shape[:2]
@@ -341,7 +359,8 @@ def check_qs_f049(pages):
                 # handwriting often spills outside the printed cell, and a
                 # narrow crop cuts off digits so OCR fails.
                 wide_dbox = (sbox[0], dbox[1], sbox[2], sbox[3])
-                issues.extend(check_date_zone(img, wide_dbox, f"{field} date"))
+                issues.extend(check_date_zone(img, wide_dbox, f"{field} date",
+                                              strict_format=True))
             elif not ini and not dat:
                 issues.append(_issue("error", field,
                                      "Both initials and date are blank.", cell))
