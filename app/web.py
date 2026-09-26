@@ -138,21 +138,15 @@ def _single_report(f):
     )
 
 
-def _batch_report(files):
-    """Run the reviewer on each PDF and render a summary table.
+def _run_batch_core(payloads):
+    """Review each (idx, filename, pdf_bytes); return list of result dicts.
 
-    Files are processed in parallel (2 workers — memory-capped for the
-    512MB Render free tier). Large batches are the main OOM risk, so
-    file count and size are limited at the route level.
+    Shared by the HTML batch report and the JSON API. All sqlite access
+    stays in the calling thread (see note in _batch_report).
     """
     import gc
     from concurrent.futures import ThreadPoolExecutor
 
-    payloads = [(i, f.filename, f.read()) for i, f in enumerate(files)]
-
-    # All sqlite access stays in the MAIN thread: concurrent writes from
-    # worker threads can stall on some filesystems (Render). Workers only
-    # run the pipeline; hashing / dup-check / record happen here.
     log_on = history.is_enabled()
     shas, alreadys = [], []
     for _, filename, pdf_bytes in payloads:
@@ -216,6 +210,18 @@ def _batch_report(files):
                 history.record(res["_sha"], res["filename"], res["form_code"],
                                res["form_name"], res["n_errors"], res["n_warnings"])
             res.pop("_sha", None)
+    return results
+
+
+def _batch_report(files):
+    """Run the reviewer on each PDF and render a summary table.
+
+    Files are processed in parallel (2 workers — memory-capped for the
+    512MB Render tier). Large batches are the main OOM risk, so
+    file count and size are limited at the route level.
+    """
+    payloads = [(i, f.filename, f.read()) for i, f in enumerate(files)]
+    results = _run_batch_core(payloads)
     n_passed = sum(1 for r in results if r.get("passed"))
     token = uuid.uuid4().hex
     BATCH_CACHE[token] = results
@@ -250,6 +256,43 @@ def batch_csv(token):
     return Response(buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition":
                              "attachment; filename=regenmed-review-report.csv"})
+
+
+@app.route("/api/review", methods=["POST"])
+def api_review():
+    """Machine-readable batch review (used by the Drive Away-mode watcher).
+
+    POST multipart with up to 10 PDFs as `pdf`. Returns JSON:
+    {"results": [{"filename", "ok", "form_code", "form_name", "passed",
+                  "n_errors", "n_warnings", "errors", "warnings",
+                  "error"}]}
+    """
+    from flask import jsonify
+    files = request.files.getlist("pdf")
+    files = [f for f in files if f and f.filename]
+    if not files:
+        return jsonify({"error": "No PDF files provided."}), 400
+    bad = [f.filename for f in files if not f.filename.lower().endswith(".pdf")]
+    if bad:
+        return jsonify({"error": "Only PDF files are supported.",
+                        "files": bad}), 400
+    if len(files) > 10:
+        return jsonify({"error": "At most 10 files per request."}), 400
+    payloads = []
+    for i, f in enumerate(files):
+        data = f.read()
+        if len(data) > 15 * 1024 * 1024:
+            return jsonify({"error": f"{f.filename} is over 15 MB."}), 400
+        payloads.append((i, f.filename, data))
+    results = _run_batch_core(payloads)
+    # 'already' may hold non-JSON-safe values; strip to plain summary
+    clean = []
+    for r in results:
+        c = {k: r.get(k) for k in ("filename", "ok", "form_code", "form_name",
+                                   "n_errors", "n_warnings", "passed",
+                                   "errors", "warnings", "error")}
+        clean.append(c)
+    return jsonify({"results": clean})
 
 
 @app.route("/history")
