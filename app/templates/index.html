@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegenMed Document Reviewer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>RegenMed Document Reviewer</h1>
+    <p class="sub">Upload a filled processing form (PDF). The reviewer detects the form type
+    and flags missing or inconsistent fields.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <form action="{{ url_for('review') }}" method="post" enctype="multipart/form-data" class="upload">
+    <label class="drop" for="pdf">Choose a PDF file…</label>
+    <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" required>
+    <span class="fname" id="fname"></span>
+    <button type="submit">Review document</button>
+  </form>
+
+  <section class="forms">
+    <h2>Supported forms</h2>
+    <ul>
+      <li><strong>MP-F-023</strong> — Tissue Processing Form</li>
+      <li><strong>QS-F-049</strong> — Processing Room Cleaning Log</li>
+      <li><strong>MP-F-021</strong> — MS Processing &amp; Packaging Lot Log</li>
+    </ul>
+  </section>
+</main>
+<script>
+document.getElementById('pdf').addEventListener('change', function (e) {
+  var n = e.target.files.length ? e.target.files[0].name : '';
+  document.getElementById('fname').textContent = n;
+});
+</script>
+</body>
+</html>

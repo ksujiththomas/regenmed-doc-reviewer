@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+       color: #1c1c1e; background: #f6f7f9; margin: 0; line-height: 1.5; }
+.wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+.wrap.wide { max-width: 980px; }
+header h1 { font-size: 28px; margin: 0 0 6px; }
+.sub { color: #666; margin-top: 0; }
+.crumb a { color: #0a6cff; text-decoration: none; }
+
+.upload { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px;
+          padding: 28px; margin: 24px 0; display: flex; flex-wrap: wrap;
+          gap: 12px; align-items: center; }
+.drop { border: 2px dashed #b9c0cc; border-radius: 8px; padding: 14px 22px;
+        cursor: pointer; color: #333; background: #fafbfc; }
+.drop:hover { border-color: #0a6cff; color: #0a6cff; }
+input[type=file] { display: none; }
+.fname { color: #444; font-size: 14px; }
+button { background: #0a6cff; color: #fff; border: 0; border-radius: 8px;
+         padding: 12px 26px; font-size: 16px; cursor: pointer; }
+button:hover { background: #0958d6; }
+
+.alert { background: #fdecea; border: 1px solid #f5c6cb; color: #8f1d22;
+         padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+.forms { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px; padding: 20px 28px; }
+.forms ul { margin: 8px 0; padding-left: 20px; }
+
+.pass { background: #e9f7ee; border: 1px solid #b7e2c3; color: #166534;
+        padding: 18px 22px; border-radius: 10px; font-size: 18px; margin: 20px 0; }
+.summary { display: flex; gap: 10px; margin: 16px 0; }
+.pill { border-radius: 999px; padding: 6px 16px; font-weight: 600; font-size: 14px; }
+.pill.err { background: #fdecea; color: #b00020; }
+.pill.warn { background: #fff4e0; color: #9a5b00; }
+
+h2 { margin-top: 32px; font-size: 20px; }
+.issues { list-style: none; padding: 0; margin: 0; }
+.issue { background: #fff; border: 1px solid #e2e4e8; border-left: 6px solid;
+         border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.issue.err { border-left-color: #d32f2f; }
+.issue.warn { border-left-color: #f0a000; }
+
+.page { margin: 24px 0; }
+.page figcaption { font-weight: 600; margin-bottom: 8px; color: #444; }
+.page img { width: 100%; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
