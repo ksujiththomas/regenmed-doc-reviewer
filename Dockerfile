@@ -18,4 +18,4 @@ COPY app/ ./app/
 ENV PORT=7860
 EXPOSE 7860
 
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 2 --timeout 300 app.web:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 1 --threads 4 --timeout 300 --max-requests 200 --max-requests-jitter 30 app.web:app"]

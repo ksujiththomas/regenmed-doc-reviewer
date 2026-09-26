@@ -18,23 +18,38 @@
   <div class="alert">{{ error }}</div>
   {% endif %}
 
-  <form action="{{ url_for('review') }}" method="post" enctype="multipart/form-data"
-        class="upload" id="uploadForm">
+  <div class="tabs">
+    <button type="button" class="tab active" data-mode="single">Single file</button>
+    <button type="button" class="tab" data-mode="batch">Batch (up to 10)</button>
+  </div>
+
+  <form id="uploadForm" class="upload" enctype="multipart/form-data">
+    <input type="hidden" name="mode" id="modeField" value="single">
     <label class="drop" for="pdf" id="dropZone">
       <span class="drop-icon">📄</span>
-      <span class="drop-text">Drag &amp; drop PDFs here<br>or <u>browse files</u></span>
+      <span class="drop-text" id="dropText">Drag &amp; drop a PDF here<br>or <u>browse files</u></span>
     </label>
-    <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" multiple required>
+    <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" required>
+
+    <ul class="file-list" id="fileList" hidden></ul>
+
     <div class="file-row">
       <span class="fname" id="fname"></span>
-      <button type="submit" id="submitBtn">Review document(s)</button>
+      <button type="submit" id="submitBtn">Review document</button>
     </div>
+
     <div class="progress" id="progress" hidden>
-      <div class="spinner"></div>
-      <span id="progressText">Uploading…</span>
+      <div class="spinner" id="spinner"></div>
+      <div class="progress-body">
+        <div class="progress-label" id="progressText">Uploading…</div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      </div>
     </div>
+    <p class="notify-row" id="notifyRow" hidden>
+      <label><input type="checkbox" id="notifyChk" checked>
+      Notify me when the batch is done (works if you switch tabs)</label>
+    </p>
   </form>
-  <p class="hint">Tip: select multiple PDFs at once for a batch summary report.</p>
 
   <section class="forms">
     <h2>Supported forms</h2>
@@ -50,18 +65,53 @@
 (function () {
   var input = document.getElementById('pdf');
   var zone = document.getElementById('dropZone');
-  var fname = document.getElementById('fname');
+  var dropText = document.getElementById('dropText');
+  var fileList = document.getElementById('fileList');
   var form = document.getElementById('uploadForm');
+  var modeField = document.getElementById('modeField');
   var progress = document.getElementById('progress');
   var progressText = document.getElementById('progressText');
+  var progressFill = document.getElementById('progressFill');
   var submitBtn = document.getElementById('submitBtn');
+  var notifyRow = document.getElementById('notifyRow');
+  var notifyChk = document.getElementById('notifyChk');
+  var mode = 'single';
 
-  function showFiles(files) {
-    var n = files.length;
-    fname.textContent = n === 0 ? '' :
-      n === 1 ? files[0].name : n + ' files selected';
+  document.querySelectorAll('.tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (t) {
+        t.classList.remove('active');
+      });
+      tab.classList.add('active');
+      mode = tab.dataset.mode;
+      modeField.value = mode;
+      input.multiple = (mode === 'batch');
+      input.value = '';
+      renderFiles([]);
+      dropText.innerHTML = mode === 'batch'
+        ? 'Drag &amp; drop PDFs here<br>or <u>browse files</u>'
+        : 'Drag &amp; drop a PDF here<br>or <u>browse files</u>';
+      submitBtn.textContent = mode === 'batch' ? 'Review batch' : 'Review document';
+      notifyRow.hidden = (mode !== 'batch');
+    });
+  });
+
+  function renderFiles(files) {
+    fileList.innerHTML = '';
+    fileList.hidden = files.length === 0;
+    Array.prototype.forEach.call(files, function (f, i) {
+      var li = document.createElement('li');
+      li.innerHTML = '<span class="fl-name"></span>' +
+        '<span class="fl-status">waiting</span>' +
+        '<div class="fl-bar"><div class="fl-fill"></div></div>';
+      li.querySelector('.fl-name').textContent = f.name;
+      li.dataset.idx = i;
+      fileList.appendChild(li);
+    });
   }
-  input.addEventListener('change', function () { showFiles(input.files); });
+  function fileRow(i) { return fileList.querySelector('[data-idx="' + i + '"]'); }
+
+  input.addEventListener('change', function () { renderFiles(input.files); });
 
   ['dragenter', 'dragover'].forEach(function (ev) {
     zone.addEventListener(ev, function (e) {
@@ -76,22 +126,85 @@
   zone.addEventListener('drop', function (e) {
     if (e.dataTransfer.files.length) {
       input.files = e.dataTransfer.files;
-      showFiles(input.files);
+      renderFiles(input.files);
     }
   });
 
-  form.addEventListener('submit', function () {
-    var n = input.files.length;
+  function setProgress(label, pct) {
     progress.hidden = false;
+    progressText.textContent = label;
+    progressFill.style.width = Math.round(pct) + '%';
+  }
+
+  function notifyDone(title, body) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body: body });
+    } else if (Notification.permission === 'default') {
+      Notification.requestPermission().then(function (p) {
+        if (p === 'granted') new Notification(title, { body: body });
+      });
+    }
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var files = input.files;
+    if (!files.length) return;
+    if (mode === 'batch' && files.length > 10) {
+      alert('Please select at most 10 files.');
+      return;
+    }
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Reviewing…';
-    var dots = 0;
-    var timer = setInterval(function () {
-      dots = (dots + 1) % 4;
-      progressText.textContent =
-        'Reviewing ' + n + ' file' + (n === 1 ? '' : 's') + '.'.repeat(dots) +
-        ' (about ' + (n * 8) + 's)';
-    }, 500);
+    submitBtn.textContent = 'Working…';
+
+    var wantNotify = mode === 'batch' && notifyChk.checked &&
+      'Notification' in window && Notification.permission === 'default';
+    if (wantNotify) Notification.requestPermission();
+
+    var fd = new FormData();
+    fd.append('mode', mode);
+    Array.prototype.forEach.call(files, function (f) { fd.append('pdf', f); });
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '{{ url_for("review") }}');
+
+    xhr.upload.addEventListener('progress', function (ev) {
+      if (!ev.lengthComputable) return;
+      var pct = ev.loaded / ev.total * 100;
+      // mark per-file rows proportionally
+      Array.prototype.forEach.call(files, function (f, i) {
+        var row = fileRow(i);
+        if (!row) return;
+        var start = i / files.length * 100, end = (i + 1) / files.length * 100;
+        var fpct = Math.max(0, Math.min(100, (pct - start) / (end - start) * 100));
+        row.querySelector('.fl-fill').style.width = fpct + '%';
+        row.querySelector('.fl-status').textContent =
+          fpct >= 100 ? 'uploaded' : 'uploading ' + Math.round(fpct) + '%';
+      });
+      setProgress('Uploading ' + files.length + ' file' +
+        (files.length === 1 ? '' : 's') + '…', pct * 0.3);
+    });
+
+    xhr.addEventListener('load', function () {
+      setProgress('Processing… (about ' + (files.length * 5) + 's)', 35);
+      // let the spinner paint before swapping the document
+      setTimeout(function () {
+        var showNote = mode === 'batch' && notifyChk.checked &&
+          document.hidden && 'Notification' in window &&
+          Notification.permission === 'granted';
+        if (showNote) notifyDone('RegenMed Reviewer', 'Batch review complete.');
+        document.open();
+        document.write(xhr.responseText);
+        document.close();
+      }, 400);
+    });
+    xhr.addEventListener('error', function () {
+      setProgress('Upload failed — please try again.', 0);
+      submitBtn.disabled = false;
+      submitBtn.textContent = mode === 'batch' ? 'Review batch' : 'Review document';
+    });
+    xhr.send(fd);
   });
 })();
 </script>
