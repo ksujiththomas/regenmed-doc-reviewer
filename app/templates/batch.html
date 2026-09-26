@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch report — RegenMed Document Reviewer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>Batch report</h1>
+    <p class="sub">{{ n_files }} file(s) reviewed — {{ n_passed }} passed with no issues.</p>
+  </header>
+
+  <table class="batch">
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Form</th>
+        <th>Status</th>
+        <th>Errors</th>
+        <th>Warnings</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in results %}
+      <tr class="{{ 'pass' if r.get('passed') else 'fail' }}">
+        <td>{{ r.filename }}</td>
+        <td>
+          {% if r.ok %}
+            {{ r.form_code }} — {{ r.form_name }}
+          {% else %}
+            <span class="muted">unknown</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if not r.ok %}
+            <span class="badge err">failed</span>
+          {% elif r.passed %}
+            <span class="badge ok">pass</span>
+          {% elif r.n_errors %}
+            <span class="badge err">{{ r.n_errors }} error(s)</span>
+          {% else %}
+            <span class="badge warn">{{ r.n_warnings }} warning(s)</span>
+          {% endif %}
+        </td>
+        <td>{{ r.n_errors if r.ok else '—' }}</td>
+        <td>{{ r.n_warnings if r.ok else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% for r in results %}
+    {% if r.ok and (r.errors or r.warnings) %}
+    <section class="file-issues">
+      <h2>{{ r.filename }} <span class="muted">{{ r.form_code }}</span></h2>
+      {% if r.errors %}
+      <h3>Errors ({{ r.errors|length }})</h3>
+      <ul class="issues err">
+        {% for i in r.errors %}
+        <li><strong>{{ i.field }}</strong> — {{ i.message }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if r.warnings %}
+      <h3>Warnings ({{ r.warnings|length }})</h3>
+      <ul class="issues warn">
+        {% for i in r.warnings %}
+        <li><strong>{{ i.field }}</strong> — {{ i.message }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% elif not r.ok %}
+    <section class="file-issues">
+      <h2>{{ r.filename }}</h2>
+      <p class="alert">{{ r.error }}</p>
+    </section>
+    {% endif %}
+  {% endfor %}
+
+  <p><a href="{{ url_for('index') }}">&larr; Review more documents</a></p>
+</main>
+</body>
+</html>

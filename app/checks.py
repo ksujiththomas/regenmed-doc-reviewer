@@ -9,7 +9,7 @@ import numpy as np
 
 from .vision import (is_filled, ink_fraction, count_x_clusters, count_y_clusters,
                      has_diagonal_slash, ocr_text)
-from .forms import MP_F_023, QS_F_049, LOT_LOG
+from .forms import MP_F_023, QS_F_049, LOT_LOG, MP_F_018
 
 DATE_RE = re.compile(r"^\d{1,2}[-/]\d{1,2}[-/]\d{2}(\d{2})?$")
 NA_RE = re.compile(r"^\W*n\W*a\W*$", re.IGNORECASE)
@@ -290,8 +290,13 @@ def check_qs_f049(pages):
             # explicit N/A (slash mark) satisfies the whole cell
             if _is_na(img, cell, dbox) or NA_RE.match(ocr_text(img, cell)):
                 continue
-            ini = is_filled(img, ibox)
-            dat = is_filled(img, dbox)
+            # Tolerant detection: search a margin-expanded zone for handwriting.
+            # The zones are vertically separate (initials top, date bottom),
+            # so position distinguishes them; the expanded search tolerates
+            # writing slightly outside the printed cell.
+            sbox = _expand(cell, 0.012)
+            ini = _has_handwriting(img, (sbox[0], sbox[1], sbox[2], ibox[3]))
+            dat = _has_handwriting(img, (sbox[0], dbox[1], sbox[2], sbox[3]))
             if ini and dat:
                 issues.extend(check_date_zone(img, dbox, f"{field} date"))
             elif not ini and not dat:
@@ -349,24 +354,30 @@ def check_lot_log(pages):
     issues = []
     img1 = pages[0]
 
-    # page 1: item table (skip header band)
+    # page 1: item table (skip header band). Tolerant handwriting detection
+    # absorbs slight misalignment and ignores grid-line residue. Search
+    # boxes are margin-expanded: writers often spill into neighboring
+    # columns (e.g. a large "N/A").
     cols = t["p1_cols"]
     for j in range(1, len(t["p1_hlines"]) - 1):
         y0, y1 = t["p1_hlines"][j] + 0.001, t["p1_hlines"][j + 1] - 0.001
+        if y0 > 0.80:
+            break  # below the item table (RegenMed Item section starts ~0.87)
         b = _row_boxes(cols, y0, y1)
-        if not is_filled(img1, b["item"]):
+        if not _has_ink_overlapping(img1, b["item"]):
             continue
         for key, label in (("lot", "Lot #"), ("exp", "Expiration Date"),
                            ("mfr", "Manufacturer")):
-            if not is_filled(img1, b[key]):
+            if not _has_ink_overlapping(img1, b[key]):
                 issues.append(_issue("error", f"Lot Log p1 row {j} — {label}",
                                      f"Item is listed but {label} is blank.", b[key], 0))
 
     # page 1 bottom: RegenMed items need Lot # OR Qty Used
     for j, (y0, y1) in enumerate(t["p1b_rows"]):
         b = _row_boxes(t["p1b_cols"], y0, y1)
-        if is_filled(img1, b["item"]) and not (
-                is_filled(img1, b["lot"]) or is_filled(img1, b["qty"])):
+        if _has_ink_overlapping(img1, b["item"]) and not (
+                _has_ink_overlapping(img1, b["lot"])
+                or _has_ink_overlapping(img1, b["qty"])):
             issues.append(_issue("error", f"Lot Log p1 item row {j + 1}",
                                  "Item is listed but both Lot # and Qty Used are blank.",
                                  (b["lot"][0], y0, b["qty"][2], y1), 0))
@@ -385,13 +396,14 @@ def check_lot_log(pages):
             ibox = (spec["item"][0], y0, spec["item"][1], y1)
             lbox = (spec["load"][0], y0, spec["load"][1], y1)
             dbox = (spec["date"][0], y0, spec["date"][1], y1)
-            if not is_filled(img2, ibox):
+            if not _has_ink_overlapping(img2, ibox):
                 continue
             voided = _struck_through(img2, (spec["item"][0], y0, spec["item"][1], y1))
             # rule: "Load # or Sterilization Date must not be left blank" --
             # at least one of the two must be present (same OR-logic as the
             # "Lot or Qty Used" rules elsewhere).
-            if not (is_filled(img2, lbox) or is_filled(img2, dbox)):
+            if not (_has_ink_overlapping(img2, lbox)
+                    or _has_ink_overlapping(img2, dbox)):
                 sev = "warning" if voided else "error"
                 msg = ("Item is listed but both Load # and Sterilization Date are blank."
                        + (" Row appears struck-through — confirm it was intentionally voided."
@@ -410,11 +422,296 @@ def check_lot_log(pages):
         pbox = (pk["pack"][0], y0, pk["pack"][1], y1)
         lbox = (pk["lot"][0], y0, pk["lot"][1], y1)
         qbox = (pk["qty"][0], y0, pk["qty"][1], y1)
-        if is_filled(img2, pbox) and not (is_filled(img2, lbox) or is_filled(img2, qbox)):
+        if _has_ink_overlapping(img2, pbox) and not (
+                _has_ink_overlapping(img2, lbox)
+                or _has_ink_overlapping(img2, qbox)):
             issues.append(_issue("error", f"Lot Log p2 packaging row {r}",
                                  "Packaging item is listed but both Lot # and Qty Used are blank.",
                                  (lbox[0], y0, qbox[2], y1), 1))
     return issues
 
 
-CHECKERS = {"MP-F-023": check_mp_f023, "QS-F-049": check_qs_f049, "MP-F-021": check_lot_log}
+CHECKERS = {"MP-F-023": check_mp_f023, "QS-F-049": check_qs_f049,
+            "MP-F-021": check_lot_log}
+
+
+# ------------------------------------------------------------- MP-F-018 (Discard)
+def _has_handwriting(img, box, min_h=8):
+    """Is there handwriting (not grid lines) in the box?
+
+    Line-aware: ignores horizontal/vertical rule fragments and box-spanning
+    lines. Used for table cells where a skewed grid line might cut through.
+    """
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = (int(box[0] * W), int(box[1] * H),
+                      int(box[2] * W), int(box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    dark = np.where(gray < 200, 255, 0).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    for i in range(1, n):
+        a, hh, ww = (stats[i, cv2.CC_STAT_AREA], stats[i, cv2.CC_STAT_HEIGHT],
+                     stats[i, cv2.CC_STAT_WIDTH])
+        if a < 15:
+            continue  # speckle
+        if ww > c.shape[1] * 0.4 and ww / max(hh, 1) > 8:
+            continue  # horizontal rule fragment (even if skewed)
+        if hh > c.shape[0] * 0.5 and hh / max(ww, 1) > 8:
+            continue  # vertical rule fragment
+        if hh >= c.shape[0] * 0.85 or ww >= c.shape[1] * 0.85:
+            continue  # spans the box: a rule line, not handwriting
+        if hh >= min_h:
+            return True
+    return False
+
+
+def _ink_blobs(img, search_box):
+    """Ink components in search_box as (x0,y0,x1,y1,aspect) fractional.
+
+    Grid-line fragments and speckles are filtered out. Aspect = width/height.
+    Dates are wide (aspect > 2); initials/signatures are squarish (aspect ~1).
+    """
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = (int(search_box[0] * W), int(search_box[1] * H),
+                      int(search_box[2] * W), int(search_box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return []
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    dark = np.where(gray < 200, 255, 0).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    blobs = []
+    for i in range(1, n):
+        a = stats[i, cv2.CC_STAT_AREA]
+        if a < 20:
+            continue
+        ww, hh = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        # filter rule fragments: long thin lines, or lines spanning the box
+        if ww > c.shape[1] * 0.4 and ww / max(hh, 1) > 8:
+            continue  # horizontal rule
+        if hh >= c.shape[0] * 0.85 and ww <= 4:
+            continue  # vertical rule (tall and narrow)
+        if ww >= c.shape[1] * 0.85 and hh <= 4:
+            continue  # horizontal rule (wide and thin)
+        bx0 = (stats[i, cv2.CC_STAT_LEFT] + x0) / W
+        by0 = (stats[i, cv2.CC_STAT_TOP] + y0) / H
+        bx1 = bx0 + ww / W
+        by1 = by0 + hh / H
+        blobs.append((bx0, by0, bx1, by1, ww / max(hh, 1)))
+    return blobs
+
+
+def _overlaps(blob, box):
+    """Does the blob's bbox intersect the box?"""
+    return not (blob[2] < box[0] or blob[0] > box[2] or
+                blob[3] < box[1] or blob[1] > box[3])
+
+
+def _has_shape(img, search_box, core_box, kind):
+    """Tolerant presence check: is there date-like or initials-like ink
+    in core_box?
+
+    The search_box is wider than core_box, so writing slightly outside the
+    printed cell still counts. A blob belongs to the zone if its center is
+    inside the zone's y-range (prevents initials bleeding into the date
+    zone from inflating the measurement). Dates are wide rectangles
+    (merged x-span is wide); initials are squarish. Blobs are merged by
+    proximity, so a fragmented date ("12 / 10 / 24") still counts as one
+    wide shape.
+    """
+    blobs = []
+    for b in _ink_blobs(img, search_box):
+        if not _overlaps(b, core_box):
+            continue
+        cy = (b[1] + b[3]) / 2
+        if not (core_box[1] <= cy <= core_box[3]):
+            continue  # center not in zone: bleed-over from neighbor
+        blobs.append(b)
+    if not blobs:
+        return False
+    if kind == "initials":
+        return any(b[4] < 1.8 for b in blobs)
+    # date: merged x-span must be wide relative to height
+    x0 = min(b[0] for b in blobs)
+    x1 = max(b[2] for b in blobs)
+    y0 = min(b[1] for b in blobs)
+    y1 = max(b[3] for b in blobs)
+    H, W = img.shape[:2]
+    wpx, hpx = (x1 - x0) * W, (y1 - y0) * H
+    return wpx / max(hpx, 1) >= 1.5 and wpx > 0.02 * W
+
+
+def _expand(box, margin):
+    return (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+
+
+def _expand_x(box, margin):
+    """Expand horizontally only: catches writing spilling into neighbor
+    columns without bleeding into adjacent rows."""
+    return (box[0] - margin, box[1], box[2] + margin, box[3])
+
+
+def _has_ink_overlapping(img, core_box, x_margin=0.025):
+    """Is there handwriting that overlaps core_box?
+
+    Searches a horizontally-expanded area (writers spill into neighbor
+    columns), but counts only ink that actually overlaps the core box.
+    Printed grid lines are removed morphologically: handwriting survives,
+    straight rules don't.
+    """
+    H, W = img.shape[:2]
+    sx0 = max(0.0, core_box[0] - x_margin)
+    sx1 = min(1.0, core_box[2] + x_margin)
+    x0, y0, x1, y1 = (int(sx0 * W), int(core_box[1] * H),
+                      int(sx1 * W), int(core_box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    _, b = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    # remove straight grid lines (long thin structures)
+    hkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    vkernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    lines = cv2.morphologyEx(b, cv2.MORPH_OPEN, hkernel)
+    lines = cv2.bitwise_or(lines, cv2.morphologyEx(b, cv2.MORPH_OPEN, vkernel))
+    ink = cv2.bitwise_and(b, cv2.bitwise_not(lines))
+    # does any surviving ink overlap the core box?
+    cx0 = int((core_box[0] - sx0) * W)
+    cx1 = int((core_box[2] - sx0) * W)
+    region = ink[:, max(0, cx0):cx1]
+    return bool((region > 0).sum() > 30)
+
+
+def _is_checked(img, box):
+    """Checkbox / X-box: marked if ink inside (checkmark or X), ignoring the border.
+
+    A checkmark/X is a diagonal stroke; an empty box is hollow. A large inset
+    excludes the border; the threshold separates checkmark ink from leakage.
+    """
+    return ink_fraction(img, box, thresh=170, inset=0.35) > 0.12
+
+
+def _is_graft_id_listed(img, box):
+    """True if the Graft ID cell holds a real ID (not blank, N/A, or a dash)."""
+    if not is_filled(img, box):
+        return False
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = (int(box[0] * W), int(box[1] * H),
+                      int(box[2] * W), int(box[3] * H))
+    c = img[y0:y1, x0:x1]
+    if c.size == 0:
+        return False
+    gray = c if len(c.shape) == 2 else cv2.cvtColor(c, cv2.COLOR_BGR2GRAY)
+    _, b = cv2.threshold(gray, 175, 255, cv2.THRESH_BINARY_INV)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(b, 8)
+    comps = [(stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
+             for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 20]
+    if not comps:
+        return False
+    # a lone horizontal dash ("—" meaning none) is not an ID
+    if len(comps) == 1:
+        wpx, hpx = comps[0]
+        if wpx > 3 * hpx:
+            return False
+    text = ocr_text(img, box).strip().upper()
+    if not text or NA_RE.match(text) or set(text) <= set("-—_ "):
+        return False
+    return True
+
+
+def check_mp_f018(pages):
+    """Tissue Discard Form (bonus): top / status / table / bottom rules."""
+    t = MP_F_018
+    img = pages[0]
+    issues = []
+
+    # --- top: Donor #, Authorized By/Date, Reason must not be blank
+    if not is_filled(img, t["donor_box"]):
+        issues.append(_issue("error", "Donor #", "Donor # is blank.", t["donor_box"]))
+
+    abox = t["auth_box"]
+    if not is_filled(img, abox):
+        issues.append(_issue("error", "Discard Authorized By/Date",
+                             "Discard Authorized By/Date is blank.", abox))
+    else:
+        # must have BOTH initials/signature and a date: the date's dashes
+        # anchor the search; initials must be a stroke left of the first dash
+        dashes = _date_dashes(img, abox)
+        if not dashes:
+            issues.append(_issue("warning", "Discard Authorized By/Date",
+                                 "Could not verify both initials and date are present — "
+                                 "please confirm visually.", abox))
+        else:
+            ibox = (abox[0], abox[1], min(dashes) - 0.015, abox[3])
+            if not _has_initials(img, ibox):
+                issues.append(_issue("error", "Discard Authorized By",
+                                     "Date is present but the authorizing initials/signature "
+                                     "are missing.", ibox))
+
+    if not is_filled(img, t["reason_box"]):
+        issues.append(_issue("error", "Reason for Discard",
+                             "Reason for Discard is blank.", t["reason_box"]))
+
+    # --- Tissue Status: exactly one box checked
+    checked = [name for name, box in t["status_boxes"].items()
+               if _is_checked(img, box)]
+    if len(checked) == 0:
+        issues.append(_issue("error", "Tissue Status",
+                             "No Tissue Status box is checked.", t["status_row_box"]))
+    elif len(checked) > 1:
+        issues.append(_issue("error", "Tissue Status",
+                             f"Multiple Tissue Status boxes are checked: "
+                             f"{', '.join(checked)}.", t["status_row_box"]))
+
+    # --- middle table: X for each listed tissue; Graft ID vs Status linkage
+    has_real_graft_id = False
+    cols, y0_0, pitch = t["table_cols"], t["table_y0"], t["table_pitch"]
+    for r in range(t["table_rows"]):
+        y0, y1 = y0_0 + r * pitch, y0_0 + (r + 1) * pitch - 0.002
+        desc_box = (cols["desc"][0] + 0.005, y0 + 0.003, cols["desc"][1] - 0.005, y1)
+        if not _has_handwriting(img, desc_box):
+            continue  # empty row
+        x_box = (cols["x"][0], y0 + 0.002, cols["x"][1], y1)
+        if not _is_checked(img, x_box):
+            issues.append(_issue("error", f"Tissue row {r + 1} — X",
+                                 "Tissue is listed but the X box is not marked.", x_box))
+        graft_box = (cols["graft"][0] + 0.005, y0 + 0.003, cols["graft"][1] - 0.005, y1)
+        if _is_graft_id_listed(img, graft_box):
+            has_real_graft_id = True
+
+    if len(checked) == 1:
+        status = checked[0]
+        if has_real_graft_id and status not in (
+                "Unreleased Packaged Tissue", "Released Packaged Tissue"):
+            issues.append(_issue(
+                "error", "Tissue Status",
+                f"A Graft ID is listed but Tissue Status is '{status}' — with a "
+                f"Graft ID it must be Unreleased or Released Packaged Tissue.",
+                t["status_boxes"][status]))
+        if not has_real_graft_id and status not in (
+                "Unprocessed Tissue", "In Processing Tissue"):
+            issues.append(_issue(
+                "error", "Tissue Status",
+                f"No Graft ID is listed but Tissue Status is '{status}' — without "
+                f"a Graft ID it must be Unprocessed or In Processing Tissue.",
+                t["status_boxes"][status]))
+
+    # --- bottom: none of the fields may be blank
+    bottom = [
+        ("Tissue Discarded By", t["discarded_by_box"]),
+        ("Confirmed By", t["confirmed_by_box"]),
+        ("Discard Date", t["discard_date_box"]),
+        ("Released Packaged — FreezerPro Updated By", t["released_by_box"]),
+        ("Released Packaged — Date", t["released_date_box"]),
+        ("Donor Chart — Log / FreezerPro Updated By", t["donorchart_by_box"]),
+        ("Donor Chart — Date", t["donorchart_date_box"]),
+    ]
+    for field, box in bottom:
+        if not is_filled(img, box):
+            issues.append(_issue("error", field, f"{field} is blank.", box))
+    return issues
+
+
+CHECKERS["MP-F-018"] = check_mp_f018

@@ -19,11 +19,12 @@
   {% endif %}
 
   <form action="{{ url_for('review') }}" method="post" enctype="multipart/form-data" class="upload">
-    <label class="drop" for="pdf">Choose a PDF file…</label>
-    <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" required>
+    <label class="drop" for="pdf">Choose PDF file(s)…</label>
+    <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" multiple required>
     <span class="fname" id="fname"></span>
-    <button type="submit">Review document</button>
+    <button type="submit">Review document(s)</button>
   </form>
+  <p class="hint">Tip: select multiple PDFs at once for a batch summary report.</p>
 
   <section class="forms">
     <h2>Supported forms</h2>
@@ -31,13 +32,15 @@
       <li><strong>MP-F-023</strong> — Tissue Processing Form</li>
       <li><strong>QS-F-049</strong> — Processing Room Cleaning Log</li>
       <li><strong>MP-F-021</strong> — MS Processing &amp; Packaging Lot Log</li>
+      <li><strong>MP-F-018</strong> — Tissue Discard Form</li>
     </ul>
   </section>
 </main>
 <script>
 document.getElementById('pdf').addEventListener('change', function (e) {
-  var n = e.target.files.length ? e.target.files[0].name : '';
-  document.getElementById('fname').textContent = n;
+  var n = e.target.files.length;
+  document.getElementById('fname').textContent =
+    n === 1 ? e.target.files[0].name : n + ' files selected';
 });
 </script>
 </body>

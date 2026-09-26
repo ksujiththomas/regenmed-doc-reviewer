@@ -7,7 +7,7 @@ scans. Generous insets are applied at check time to absorb scan shift/scale.
 # ---------------------------------------------------------------- MP-F-023
 MP_F_023 = {
     "code": "MP-F-023",
-    "name": "MS Processing Instructions / Tissue Open Checklist",
+    "name": "Tissue Processing Form",
     "footer_markers": ["MP-F-023"],
     "title_markers": ["MS Processing Instructions", "Tissue Open Checklist"],
     "header_cols": {  # label -> (x0, x1) ; value row y 0.12-0.15 unless noted
@@ -72,7 +72,7 @@ MP_F_023 = {
 # ---------------------------------------------------------------- QS-F-049
 QS_F_049 = {
     "code": "QS-F-049",
-    "name": "Technical/Quality Review and Disposition Statement",
+    "name": "Processing Room Cleaning Log",
     "footer_markers": ["QS-F-049"],
     "title_markers": ["Technical/Quality Review", "Disposition Statement"],
     "tech_x": (0.775, 0.868),
@@ -115,4 +115,43 @@ LOT_LOG = {
                 "pack": (0.4947, 0.6294), "lot": (0.6294, 0.8041), "qty": (0.8041, 0.9406)},
 }
 
-FORMS = {"MP-F-023": MP_F_023, "QS-F-049": QS_F_049, "MP-F-021": LOT_LOG}
+# ---------------------------------------------------------------- MP-F-018 (Discard)
+MP_F_018 = {
+    "code": "MP-F-018",
+    "name": "Tissue Discard Form",
+    "footer_markers": ["MP-F-018"],
+    "title_markers": ["Tissue Discard Form", "DISCARD FORM"],
+    # top fields (value zones exclude printed labels)
+    "donor_box": (0.075, 0.100, 0.180, 0.130),
+    "auth_box": (0.560, 0.098, 0.965, 0.138),
+    "reason_box": (0.200, 0.130, 0.965, 0.158),
+    # Tissue Status checkboxes (17px at 150dpi; tight boxes avoid label text)
+    "status_boxes": {
+        "Unprocessed Tissue": (0.152, 0.171, 0.171, 0.187),
+        "In Processing Tissue": (0.322, 0.176, 0.341, 0.192),
+        "Unreleased Packaged Tissue": (0.495, 0.181, 0.514, 0.197),
+        "Released Packaged Tissue": (0.726, 0.187, 0.744, 0.203),
+    },
+    "status_row_box": (0.060, 0.160, 0.965, 0.198),
+    # middle table: Graft IDs | Tissue Description | Storage Location | X
+    "table_cols": {
+        "graft": (0.035, 0.185),
+        "desc": (0.185, 0.735),
+        "storage": (0.735, 0.925),
+        "x": (0.925, 0.968),
+    },
+    "table_y0": 0.232,    # first data row top (below header)
+    "table_pitch": 0.0295,
+    "table_rows": 17,
+    # bottom fields (y calibrated from deskewed 150dpi scan)
+    "discarded_by_box": (0.175, 0.733, 0.345, 0.773),
+    "confirmed_by_box": (0.470, 0.733, 0.615, 0.773),
+    "discard_date_box": (0.770, 0.733, 0.960, 0.773),
+    "released_by_box": (0.415, 0.773, 0.615, 0.806),
+    "released_date_box": (0.770, 0.773, 0.960, 0.806),
+    "donorchart_by_box": (0.415, 0.813, 0.615, 0.862),
+    "donorchart_date_box": (0.770, 0.813, 0.960, 0.862),
+}
+
+FORMS = {"MP-F-023": MP_F_023, "QS-F-049": QS_F_049, "MP-F-021": LOT_LOG,
+         "MP-F-018": MP_F_018}

@@ -26,11 +26,20 @@ def index():
 
 @app.route("/review", methods=["POST"])
 def review():
-    f = request.files.get("pdf")
-    if f is None or not f.filename:
+    files = request.files.getlist("pdf")
+    files = [f for f in files if f and f.filename]
+    if not files:
         return render_template("index.html", error="Please choose a PDF file to upload.")
-    if not f.filename.lower().endswith(".pdf"):
-        return render_template("index.html", error="Only PDF files are supported.")
+    bad = [f.filename for f in files if not f.filename.lower().endswith(".pdf")]
+    if bad:
+        return render_template("index.html",
+                               error=f"Only PDF files are supported: {', '.join(bad)}")
+    if len(files) == 1:
+        return _single_report(files[0])
+    return _batch_report(files)
+
+
+def _single_report(f):
     pdf_bytes = f.read()
     try:
         result = run(pdf_bytes)
@@ -63,6 +72,40 @@ def review():
         passed=(len(issues) == 0),
         pages=pages,
     )
+
+
+def _batch_report(files):
+    """Run the reviewer on each PDF and render a summary table."""
+    results = []
+    for f in files:
+        pdf_bytes = f.read()
+        try:
+            r = run(pdf_bytes)
+        except Exception as exc:  # noqa: BLE001
+            results.append({"filename": f.filename, "ok": False,
+                            "error": f"Could not process ({exc})."})
+            continue
+        if r["form_code"] is None:
+            results.append({"filename": f.filename, "ok": False,
+                            "error": r["note"] or "Could not identify the form type."})
+            continue
+        issues = r["issues"]
+        errors = [i for i in issues if i["severity"] == "error"]
+        warnings = [i for i in issues if i["severity"] == "warning"]
+        results.append({
+            "filename": f.filename,
+            "ok": True,
+            "form_code": r["form_code"],
+            "form_name": r["form_name"],
+            "n_errors": len(errors),
+            "n_warnings": len(warnings),
+            "passed": len(issues) == 0,
+            "errors": errors,
+            "warnings": warnings,
+        })
+    n_passed = sum(1 for r in results if r.get("passed"))
+    return render_template("batch.html", results=results, n_files=len(results),
+                           n_passed=n_passed)
 
 
 if __name__ == "__main__":

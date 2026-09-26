@@ -41,3 +41,25 @@ h2 { margin-top: 32px; font-size: 20px; }
 .page { margin: 24px 0; }
 .page figcaption { font-weight: 600; margin-bottom: 8px; color: #444; }
 .page img { width: 100%; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+
+.hint { color: #666; font-size: 14px; margin-top: -12px; }
+table.batch { width: 100%; border-collapse: collapse; background: #fff;
+              border: 1px solid #e2e4e8; border-radius: 12px; overflow: hidden;
+              margin: 20px 0; font-size: 14px; }
+table.batch th, table.batch td { padding: 10px 12px; text-align: left;
+              border-bottom: 1px solid #eef0f3; }
+table.batch th { background: #f0f2f5; font-weight: 600; }
+table.batch tr.pass td:first-child { border-left: 4px solid #22a355; }
+table.batch tr.fail td:first-child { border-left: 4px solid #d32f2f; }
+.badge { border-radius: 999px; padding: 3px 12px; font-weight: 600; font-size: 12px; }
+.badge.ok { background: #e9f7ee; color: #166534; }
+.badge.err { background: #fdecea; color: #b00020; }
+.badge.warn { background: #fff4e0; color: #9a5b00; }
+.muted { color: #888; font-weight: 400; font-size: 13px; }
+.file-issues { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px;
+               padding: 16px 22px; margin: 16px 0; }
+.file-issues h2 { margin-top: 0; font-size: 17px; }
+.file-issues h3 { font-size: 15px; margin: 14px 0 6px; }
+.issues.err li, .issues.warn li { margin: 6px 0; font-size: 14px; }
+.issues.err { color: #8f1d22; }
+.issues.warn { color: #7a4d00; }
