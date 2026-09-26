@@ -34,17 +34,20 @@ def _ink_x_span(img, box, thresh=170):
 
 
 def check_date_zone(img, box, field, page=0):
-    """Date must be present and in MM/DD/YY (or MM-DD-YY) shape."""
+    """Date must be present and in MM/DD/YY (or MM-DD-YY) shape.
+
+    Fast path first: structural check (wide ink, digit-sized components)
+    is ~50ms vs ~174ms for a Tesseract subprocess. OCR only runs when
+    the structure is ambiguous.
+    """
     if not is_filled(img, box):
         return [_issue("error", field, "Date is blank.", box, page)]
+    # Fast structural pass: if it clearly looks like a date, accept.
+    if _looks_like_date(img, box):
+        return []
     text = ocr_text(img, box, "--psm 7 -c tessedit_char_whitelist=0123456789/-")
     text = text.replace(" ", "")
     if DATE_RE.match(text):
-        return []
-    # OCR often fails on handwriting. Structural fallback: a valid date
-    # is a wide ink region with multiple digit-sized components. If the
-    # structure looks date-like, accept it without a warning.
-    if _looks_like_date(img, box):
         return []
     # structural fallback: too many strokes => probably words, not a date
     H, W = img.shape[:2]

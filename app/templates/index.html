@@ -18,11 +18,21 @@
   <div class="alert">{{ error }}</div>
   {% endif %}
 
-  <form action="{{ url_for('review') }}" method="post" enctype="multipart/form-data" class="upload">
-    <label class="drop" for="pdf">Choose PDF file(s)…</label>
+  <form action="{{ url_for('review') }}" method="post" enctype="multipart/form-data"
+        class="upload" id="uploadForm">
+    <label class="drop" for="pdf" id="dropZone">
+      <span class="drop-icon">📄</span>
+      <span class="drop-text">Drag &amp; drop PDFs here<br>or <u>browse files</u></span>
+    </label>
     <input type="file" id="pdf" name="pdf" accept=".pdf,application/pdf" multiple required>
-    <span class="fname" id="fname"></span>
-    <button type="submit">Review document(s)</button>
+    <div class="file-row">
+      <span class="fname" id="fname"></span>
+      <button type="submit" id="submitBtn">Review document(s)</button>
+    </div>
+    <div class="progress" id="progress" hidden>
+      <div class="spinner"></div>
+      <span id="progressText">Uploading…</span>
+    </div>
   </form>
   <p class="hint">Tip: select multiple PDFs at once for a batch summary report.</p>
 
@@ -37,11 +47,53 @@
   </section>
 </main>
 <script>
-document.getElementById('pdf').addEventListener('change', function (e) {
-  var n = e.target.files.length;
-  document.getElementById('fname').textContent =
-    n === 1 ? e.target.files[0].name : n + ' files selected';
-});
+(function () {
+  var input = document.getElementById('pdf');
+  var zone = document.getElementById('dropZone');
+  var fname = document.getElementById('fname');
+  var form = document.getElementById('uploadForm');
+  var progress = document.getElementById('progress');
+  var progressText = document.getElementById('progressText');
+  var submitBtn = document.getElementById('submitBtn');
+
+  function showFiles(files) {
+    var n = files.length;
+    fname.textContent = n === 0 ? '' :
+      n === 1 ? files[0].name : n + ' files selected';
+  }
+  input.addEventListener('change', function () { showFiles(input.files); });
+
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) {
+      e.preventDefault(); zone.classList.add('dragging');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) {
+      e.preventDefault(); zone.classList.remove('dragging');
+    });
+  });
+  zone.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      showFiles(input.files);
+    }
+  });
+
+  form.addEventListener('submit', function () {
+    var n = input.files.length;
+    progress.hidden = false;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Reviewing…';
+    var dots = 0;
+    var timer = setInterval(function () {
+      dots = (dots + 1) % 4;
+      progressText.textContent =
+        'Reviewing ' + n + ' file' + (n === 1 ? '' : 's') + '.'.repeat(dots) +
+        ' (about ' + (n * 8) + 's)';
+    }, 500);
+  });
+})();
 </script>
 </body>
 </html>
