@@ -140,8 +140,8 @@ MP_F_018 = {
         "storage": (0.735, 0.925),
         "x": (0.925, 0.968),
     },
-    "table_y0": 0.232,    # first data row top (below header)
-    "table_pitch": 0.0295,
+    "table_y0": 0.2485,   # first data row top (below header)
+    "table_pitch": 0.0270,
     "table_rows": 17,
     # bottom fields (y calibrated from deskewed 150dpi scan)
     "discarded_by_box": (0.175, 0.733, 0.345, 0.773),

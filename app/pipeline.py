@@ -48,17 +48,36 @@ def render_pdf(pdf_bytes):
 
 
 def deskew(img):
-    """Correct small scan rotation via min-area-rect of ink."""
+    """Correct small scan rotation from the form's own printed rules.
+
+    The previous min-area-rect-of-all-ink approach was fragile: a blob of
+    handwriting could swing the angle several degrees and actively tilt an
+    otherwise straight scan, misaligning every calibrated box downstream.
+    Long printed table rules are the ground truth for the form's orientation;
+    the median Hough-line angle is robust to handwriting and short strokes.
+    Falls back to no rotation when too few long lines are found.
+    """
     gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, b = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
-    coords = np.column_stack(np.where(b > 0))
-    if len(coords) < 100:
-        return img
-    angle = cv2.minAreaRect(coords)[-1]
-    angle = -(90 + angle) if angle < -45 else -angle
-    if abs(angle) > 5:  # only fix small skew
-        return img
     H, W = gray.shape
+    edges = cv2.Canny(gray, 50, 150)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=300,
+                            minLineLength=int(W * 0.4), maxLineGap=10)
+    if lines is None:
+        return img
+    angs = []
+    for x1, y1, x2, y2 in lines.reshape(-1, 4):
+        a = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+        if a > 90:
+            a -= 180
+        elif a < -90:
+            a += 180
+        if abs(a) < 8:  # near-horizontal rule
+            angs.append(a)
+    if len(angs) < 3:
+        return img
+    angle = float(np.median(angs))
+    if abs(angle) > 5 or abs(angle) < 0.15:  # only fix small, real skew
+        return img
     M = cv2.getRotationMatrix2D((W / 2, H / 2), angle, 1.0)
     return cv2.warpAffine(img, M, (W, H), flags=cv2.INTER_CUBIC,
                           borderMode=cv2.BORDER_REPLICATE)

@@ -645,6 +645,48 @@ def _has_ink_overlapping(img, core_box, x_margin=0.025):
     return bool((region > 0).sum() > 30)
 
 
+def _detect_status_boxes(img, row_box):
+    """Locate the 4 Tissue Status checkbox squares dynamically.
+
+    Absolute calibrated boxes drift when a scan is shifted/rotated relative
+    to the calibration sample (a few px is enough to catch a neighbouring
+    checkmark). The printed squares are ~square, ~17px at 150dpi, and sit on
+    one row; printed letters are narrower. Returns 4 boxes in x-order, or []
+    if detection is not clean (caller falls back to calibrated boxes).
+    """
+    H, W = img.shape[:2]
+    y0, y1 = int(row_box[1] * H), int(row_box[3] * H)
+    band = img[y0:y1, :]
+    _, b = cv2.threshold(band, 180, 255, cv2.THRESH_BINARY_INV)
+    cnts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    sq = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w >= 15 and h >= 15 and w * h <= 600 and 0.8 <= w / h <= 1.25:
+            sq.append((x / W, (y + y0) / H, (x + w) / W, (y + h + y0) / H))
+    if len(sq) < 4:
+        return []
+    # the 4 squares share a row: take the 4 with the tightest y-centres
+    sq.sort(key=lambda bb: (bb[1] + bb[3]) / 2)
+    best = None
+    for i in range(len(sq) - 3):
+        win = sq[i:i + 4]
+        spread = max(bb[3] for bb in win) - min(bb[1] for bb in win)
+        if best is None or spread < best[0]:
+            best = (spread, win)
+    win = sorted(best[1], key=lambda bb: bb[0])
+    # sanity: similar sizes, spread across the row, non-overlapping
+    ws = [(bb[2] - bb[0]) * W for bb in win]
+    if max(ws) > 1.6 * min(ws):
+        return []
+    if win[3][0] - win[0][0] < 0.3:
+        return []
+    for a, bb in zip(win, win[1:]):
+        if bb[0] < a[2] - 0.005:
+            return []
+    return win
+
+
 def _is_checked(img, box):
     """Checkbox / X-box: marked if ink inside (checkmark or X), ignoring the border.
 
@@ -682,6 +724,59 @@ def _is_graft_id_listed(img, box):
     return True
 
 
+def _find_by_labels(img):
+    """Locate printed 'By:' labels in MP-F-018's bottom section via Tesseract.
+
+    Returns a list of (x1, y_center) in page fractions, or [] if OCR fails.
+    The signature boxes overlap their printed labels, so a plain is_filled()
+    can never report a blank signature; anchoring the value zone just right
+    of the 'By:' label excludes the printed ink.
+    """
+    try:
+        from pytesseract import image_to_data, Output
+    except ImportError:
+        return []
+    H, W = img.shape[:2]
+    y0, y1 = int(0.70 * H), int(0.88 * H)
+    strip = img[y0:y1, :]
+    big = cv2.resize(strip, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    try:
+        d = image_to_data(big, output_type=Output.DICT, config="--psm 6")
+    except Exception:
+        return []
+    out = []
+    n = len(d["text"])
+    for i in range(n):
+        txt = (d["text"][i] or "").strip()
+        if txt not in ("By:", "By"):
+            continue
+        try:
+            conf = float(d["conf"][i])
+        except (ValueError, TypeError):
+            continue
+        if conf < 30:
+            continue
+        x1 = (d["left"][i] + d["width"][i]) / 2 / W
+        yc = (d["top"][i] + d["height"][i] / 2) / 2 / H + y0 / H
+        out.append((x1, yc))
+    return out
+
+
+def _sig_value_zone(box, by_labels):
+    """Value zone for a 'By' signature box: right of its 'By:' label.
+
+    Falls back to the full box when no label is found (e.g. OCR failure).
+    """
+    cands = [x1 for x1, yc in by_labels
+             if box[1] < yc < box[3] and x1 < box[2] - 0.02]
+    if not cands:
+        return box
+    x0 = max(cands) + 0.008
+    if x0 >= box[2] - 0.02:
+        return box
+    return (x0, box[1] + 0.004, box[2], box[3] - 0.004)
+
+
 def check_mp_f018(pages):
     """Tissue Discard Form (bonus): top / status / table / bottom rules."""
     t = MP_F_018
@@ -715,9 +810,16 @@ def check_mp_f018(pages):
         issues.append(_issue("error", "Reason for Discard",
                              "Reason for Discard is blank.", t["reason_box"]))
 
-    # --- Tissue Status: exactly one box checked
-    checked = [name for name, box in t["status_boxes"].items()
-               if _is_checked(img, box)]
+    # --- Tissue Status: exactly one box checked (squares located dynamically
+    # so a shifted/rotated scan can't misalign the calibrated boxes)
+    status_labels = ["Unprocessed Tissue", "In Processing Tissue",
+                     "Unreleased Packaged Tissue", "Released Packaged Tissue"]
+    dyn_boxes = _detect_status_boxes(img, t["status_row_box"])
+    if dyn_boxes:
+        status_items = list(zip(status_labels, dyn_boxes))
+    else:
+        status_items = list(t["status_boxes"].items())
+    checked = [name for name, box in status_items if _is_checked(img, box)]
     if len(checked) == 0:
         issues.append(_issue("error", "Tissue Status",
                              "No Tissue Status box is checked.", t["status_row_box"]))
@@ -759,19 +861,23 @@ def check_mp_f018(pages):
                 f"a Graft ID it must be Unprocessed or In Processing Tissue.",
                 t["status_boxes"][status]))
 
-    # --- bottom: none of the fields may be blank; dates get format check
+    # --- bottom: none of the fields may be blank; dates get format check.
+    # Signature boxes overlap their printed labels, so the value zone is
+    # anchored just right of each 'By:' label (found via one OCR pass).
+    by_labels = _find_by_labels(img)
     bottom = [
-        ("Tissue Discarded By", t["discarded_by_box"], False),
-        ("Confirmed By", t["confirmed_by_box"], False),
-        ("Discard Date", t["discard_date_box"], True),
-        ("Released Packaged — FreezerPro Updated By", t["released_by_box"], False),
-        ("Released Packaged — Date", t["released_date_box"], True),
-        ("Donor Chart — Log / FreezerPro Updated By", t["donorchart_by_box"], False),
-        ("Donor Chart — Date", t["donorchart_date_box"], True),
+        ("Tissue Discarded By", t["discarded_by_box"], False, True),
+        ("Confirmed By", t["confirmed_by_box"], False, True),
+        ("Discard Date", t["discard_date_box"], True, False),
+        ("Released Packaged — FreezerPro Updated By", t["released_by_box"], False, True),
+        ("Released Packaged — Date", t["released_date_box"], True, False),
+        ("Donor Chart — Log / FreezerPro Updated By", t["donorchart_by_box"], False, True),
+        ("Donor Chart — Date", t["donorchart_date_box"], True, False),
     ]
-    for field, box, is_date in bottom:
-        if not is_filled(img, box):
-            issues.append(_issue("error", field, f"{field} is blank.", box))
+    for field, box, is_date, is_sig in bottom:
+        vbox = _sig_value_zone(box, by_labels) if is_sig else box
+        if not is_filled(img, vbox):
+            issues.append(_issue("error", field, f"{field} is blank.", vbox))
         elif is_date:
             issues.extend(check_date_zone(img, box, field))
     return issues
