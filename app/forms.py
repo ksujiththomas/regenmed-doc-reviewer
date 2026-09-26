@@ -23,7 +23,17 @@ MP_F_023 = {
     },
     "header_value_y": (0.12, 0.15),
     "donor_label_box": (0.04, 0.08, 0.16, 0.10),  # Donor # lives in label row
-    "by_date_split": (0.12, 0.133, 0.15),  # (top, mid, bottom) for stacked By/Date
+    # stacked By/Date cells: (top, mid, bottom). Writers often sign high,
+    # overlapping the printed label (which ends ~y 0.112), so the initials
+    # zone starts at 0.115.
+    "by_date_split": (0.115, 0.133, 0.15),
+    # writers also spill across the column divider (e.g. "MW" written over the
+    # Clean Room Log | Tissue Checked In boundary), so each cell's initials
+    # zone extends slightly into its neighbour: (cell_x0, cell_x1, ibox_x0, ibox_x1)
+    "stacked_cells": {
+        "Clean Room Log": (0.78, 0.88, 0.78, 0.885),
+        "Tissue Checked In": (0.88, 0.97, 0.855, 0.97),
+    },
     "date_fields": ["Date of Recovery", "Date of Processing"],
     "ops_review_box": (0.54, 0.455, 0.92, 0.472),
     "ops_review_min_span": 0.09,  # ink x-span fraction needed for initials+date

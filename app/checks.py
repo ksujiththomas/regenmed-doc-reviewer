@@ -66,9 +66,10 @@ def check_mp_f023(pages):
 
     for label, (cx0, cx1) in t["header_cols"].items():
         box = (cx0, y0, cx1, y1)
-        if label in ("Clean Room Log", "Tissue Checked In"):
+        if label in t["stacked_cells"]:
+            cx0, cx1, ix0, ix1 = t["stacked_cells"][label]
             top, mid, bot = t["by_date_split"]
-            ibox, dbox = (cx0, top, cx1, mid), (cx0, mid, cx1, bot)
+            ibox, dbox = (ix0, top, ix1, mid), (cx0, mid, cx1, bot)
             if not is_filled(img, ibox):
                 issues.append(_issue("error", f"{label} — By (initials)",
                                      "Initials are missing.", ibox))
