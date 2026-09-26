@@ -3,15 +3,20 @@ import base64
 import csv
 import io
 import os
+import threading
 import uuid
 
 import cv2
 from flask import Flask, Response, redirect, render_template, request, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import history
+from . import away, drive_client, history
 from .pipeline import run, ReviewError
 
 app = Flask(__name__)
+# Render terminates TLS at its proxy; honor X-Forwarded-Proto so OAuth
+# redirect URIs are https.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config["MAX_CONTENT_LENGTH"] = 160 * 1024 * 1024  # 10 files x 15 MB + overhead
 
 # In-memory cache of batch results for CSV download (ephemeral, fine).
@@ -268,6 +273,203 @@ def history_toggle():
 def history_clear():
     history.clear()
     return redirect(url_for("history_page"))
+
+
+# ---------------------------------------------------------------- Away mode
+
+def _oauth_flow():
+    from google_auth_oauthlib.flow import Flow
+    return Flow.from_client_config(
+        {"web": {
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token"}},
+        scopes=drive_client.SCOPES,
+        redirect_uri=url_for("drive_callback", _external=True))
+
+
+@app.route("/drive/connect")
+def drive_connect():
+    if not drive_client.client_configured():
+        cfg = away.get_config()
+        return render_template(
+            "away.html", error="Google sign-in isn't configured on the "
+            "server yet (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).",
+            connected=False, oauth_ready=False, enabled=False,
+            interval_min=int(cfg.get("interval_min", 30)), runs=[])
+    flow = _oauth_flow()
+    auth_url, state = flow.authorization_url(
+        access_type="offline", prompt="consent",
+        include_granted_scopes="false")
+    away.save_config(oauth_state=state)
+    return redirect(auth_url)
+
+
+@app.route("/drive/callback")
+def drive_callback():
+    cfg = away.get_config()
+    if (not request.args.get("state")
+            or request.args.get("state") != cfg.get("oauth_state")):
+        return render_template(
+            "away.html", error="Authorization didn't go through "
+            "(state mismatch). Please try connecting again.",
+            connected=False, oauth_ready=True, enabled=False,
+            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 400
+    flow = _oauth_flow()
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception:
+        return redirect(url_for("drive_connect"))
+    creds = flow.credentials
+    if not creds.refresh_token:
+        return render_template(
+            "away.html", error="Google didn't return a refresh token. "
+            "Try disconnecting the app at myaccount.google.com/permissions "
+            "and connecting again.",
+            connected=False, oauth_ready=True, enabled=False,
+            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 400
+    try:
+        svc = drive_client.drive_service(creds.refresh_token)
+        email = drive_client.account_email(svc)
+    except Exception as exc:  # noqa: BLE001
+        return render_template(
+            "away.html", error=f"Could not reach Google Drive: {exc}",
+            connected=False, oauth_ready=True, enabled=False,
+            interval_min=int(cfg.get("interval_min", 30)), runs=[]), 502
+    away.save_config(refresh_token=creds.refresh_token,
+                     account_email=email, oauth_state="")
+    return redirect(url_for("away_page"))
+
+
+@app.route("/drive/disconnect", methods=["POST"])
+def drive_disconnect():
+    away.clear_token()
+    return redirect(url_for("away_page"))
+
+
+def _drive_svc_or_none():
+    token = away.get_config().get("refresh_token")
+    if not token:
+        return None
+    try:
+        return drive_client.drive_service(token)
+    except Exception:  # noqa: BLE001 - expired/revoked
+        away.clear_token()
+        return None
+
+
+@app.route("/away", methods=["GET", "POST"])
+def away_page():
+    cfg = away.get_config()
+    ctx = {
+        "connected": False,
+        "oauth_ready": drive_client.client_configured(),
+        "enabled": cfg.get("enabled") == "1",
+        "interval_min": int(cfg.get("interval_min", 30)),
+        "last_run": cfg.get("last_run", ""),
+        "watch_name": cfg.get("watch_name", ""),
+        "account_email": cfg.get("account_email", ""),
+        "runs": away.recent_runs(10),
+        "folders": [],
+        "error": None,
+        "notice": None,
+    }
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        svc = _drive_svc_or_none()
+        if action in ("setup_default", "use_folder") and svc is None:
+            ctx["error"] = "Drive connection expired — please reconnect."
+        elif action == "setup_default":
+            try:
+                root = away.setup_default_tree(svc)
+                ctx["notice"] = (f"Created '{root}' in your Drive with "
+                                 "Watch / Processed / Needs attention / Reports.")
+            except Exception as exc:  # noqa: BLE001
+                ctx["error"] = f"Could not create folders: {exc}"
+        elif action == "use_folder":
+            fid = (request.form.get("folder")
+                   or drive_client.extract_folder_id(
+                       request.form.get("folder_link", "")))
+            if not fid:
+                ctx["error"] = "Pick a folder or paste a Drive folder link."
+            else:
+                try:
+                    name = drive_client.get_folder(svc, fid)
+                    away.setup_folders(svc, fid, name)
+                    ctx["notice"] = f"Now watching '{name}'."
+                except Exception as exc:  # noqa: BLE001
+                    ctx["error"] = f"Could not use that folder: {exc}"
+        elif action == "toggle":
+            new = "0" if ctx["enabled"] else "1"
+            away.save_config(enabled=new)
+            ctx["enabled"] = new == "1"
+            _reschedule_poll()
+            ctx["notice"] = ("Away mode enabled." if ctx["enabled"]
+                             else "Away mode paused.")
+        elif action == "interval":
+            try:
+                mins = max(5, min(240, int(
+                    request.form.get("interval_min", 30))))
+            except ValueError:
+                mins = 30
+            away.save_config(interval_min=mins)
+            ctx["interval_min"] = mins
+            _reschedule_poll()
+            ctx["notice"] = f"Will check every {mins} minutes."
+        elif action == "run_now":
+            threading.Thread(target=away.poll_drive, daemon=True).start()
+            ctx["notice"] = "Check started — refresh in a minute for results."
+        cfg = away.get_config()
+        ctx["enabled"] = cfg.get("enabled") == "1"
+        ctx["watch_name"] = cfg.get("watch_name", "")
+        ctx["last_run"] = cfg.get("last_run", "")
+
+    if away.get_config().get("refresh_token"):
+        ctx["connected"] = True
+        ctx["account_email"] = away.get_config().get("account_email", "")
+        if not ctx["watch_name"]:
+            svc = _drive_svc_or_none()
+            if svc is not None:
+                try:
+                    ctx["folders"] = drive_client.list_top_folders(svc)
+                except Exception:  # noqa: BLE001
+                    pass
+    return render_template("away.html", **ctx)
+
+
+# Scheduler: one worker only, so a single BackgroundScheduler in this process.
+_scheduler = None
+
+
+def _poll_job():
+    try:
+        away.poll_drive()
+    except Exception:  # noqa: BLE001 - last resort; per-file errors are logged
+        pass
+
+
+def _reschedule_poll():
+    if _scheduler is not None:
+        mins = int(away.get_config().get("interval_min", 30))
+        _scheduler.reschedule_job("drive_poll", trigger="interval",
+                                  minutes=mins)
+
+
+def _ensure_scheduler():
+    global _scheduler
+    if _scheduler is not None:
+        return
+    from apscheduler.schedulers.background import BackgroundScheduler
+    mins = int(away.get_config().get("interval_min", 30))
+    _scheduler = BackgroundScheduler(daemon=True)
+    _scheduler.add_job(_poll_job, "interval", minutes=mins, id="drive_poll",
+                       max_instances=1, coalesce=True)
+    _scheduler.start()
+
+
+_ensure_scheduler()
 
 
 if __name__ == "__main__":

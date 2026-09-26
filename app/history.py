@@ -4,16 +4,31 @@ Duplicate detection: if the same file bytes were reviewed before, the
 uploader is told when and what the result was, instead of silently
 re-processing.
 
-The DB lives next to the app (ephemeral on Render's free tier — the log
-resets on redeploy, which is acceptable for a hackathon demo).
+The DB lives in DATA_DIR (a Render persistent disk mount, e.g. /app/data)
+so the log and Away-mode tokens survive deploys. Falls back to the app
+directory when DATA_DIR is unset or not writable.
 """
 import hashlib
 import os
 import sqlite3
 import time
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "..", "review_log.db")
+
+def _data_dir():
+    d = os.environ.get("DATA_DIR", "/app/data")
+    try:
+        os.makedirs(d, exist_ok=True)
+        # verify writability
+        probe = os.path.join(d, ".writetest")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        return d
+    except OSError:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+DB_PATH = os.path.join(_data_dir(), "review_log.db")
 
 
 def _conn():

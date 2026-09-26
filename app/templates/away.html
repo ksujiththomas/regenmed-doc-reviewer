@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Away mode — RegenMed Document Reviewer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row form { margin: 0; }
+  button.btn, .btn { background: #0a6cff; color: #fff; border: 0; border-radius: 8px;
+    padding: 9px 16px; font-size: 15px; cursor: pointer; text-decoration: none;
+    display: inline-block; }
+  button.btn:hover { background: #0958d6; }
+  button.btn.secondary { background: #e8ecf1; color: #1c2733; }
+  button.btn.secondary:hover { background: #dbe1e9; }
+  button.btn.danger { background: #d32f2f; }
+  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px; }
+  .on { background: #22a355; } .off { background: #b0b7c0; }
+  select, input[type=text] { padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #c9d2dd; font-size: 15px; }
+  .kv { margin: 6px 0; }
+  .kv b { display: inline-block; min-width: 150px; }
+  table.runs { width: 100%; border-collapse: collapse; background: #fff; margin-top: 8px; }
+  table.runs th, table.runs td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eef1f5; font-size: 14px; }
+  table.runs th { background: #f0f2f5; }
+  .ok-badge { color: #22a355; font-weight: 600; }
+  .err-badge { color: #d32f2f; font-weight: 600; }
+  .hint { color: #5b6b7d; font-size: 14px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>🌙 Away mode</h1>
+    <p class="sub">Point the reviewer at a Google Drive folder. While you're away,
+    new PDFs there are reviewed automatically — clean files move to
+    <b>Processed</b>, files with issues move to <b>Needs attention</b>,
+    and a CSV report lands in <b>Reports</b>.</p>
+    <p><a href="{{ url_for('index') }}">← Back to uploader</a></p>
+  </header>
+
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="alert" style="background:#e8f7ee;border-color:#bfe6cd;color:#14532d">{{ notice }}</div>{% endif %}
+
+  <section class="forms">
+    <h2>1 · Google Drive connection</h2>
+    {% if connected %}
+      <p class="kv"><b>Status</b> <span class="status-dot on"></span>Connected as {{ account_email }}</p>
+      <div class="row">
+        <form method="post" action="{{ url_for('drive_disconnect') }}">
+          <button class="btn danger" type="submit">Disconnect</button>
+        </form>
+      </div>
+    {% else %}
+      <p class="kv"><span class="status-dot off"></span>Not connected.</p>
+      {% if oauth_ready %}
+        <a class="btn" href="{{ url_for('drive_connect') }}">Connect Google Drive</a>
+      {% else %}
+        <p class="hint">The server isn't configured for Google sign-in yet
+        (missing Google client ID/secret). Add them as environment variables and redeploy.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  {% if connected %}
+  <section class="forms">
+    <h2>2 · Watch folder</h2>
+    {% if watch_name %}
+      <p class="kv"><b>Watching</b> {{ watch_name }}</p>
+      <p class="hint">Drop PDFs into that Drive folder — they'll be picked up on the next check.</p>
+    {% else %}
+      <p class="hint">Choose which Drive folder to watch:</p>
+      <div class="row" style="margin-bottom:10px">
+        <form method="post" action="{{ url_for('away_page') }}">
+          <input type="hidden" name="action" value="setup_default">
+          <button class="btn" type="submit">✨ Create folder set for me</button>
+        </form>
+      </div>
+      <form method="post" action="{{ url_for('away_page') }}" class="row">
+        <input type="hidden" name="action" value="use_folder">
+        <select name="folder">
+          <option value="">— or pick an existing folder —</option>
+          {% for f in folders %}
+            <option value="{{ f.id }}">{{ f.name }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn secondary" type="submit">Use this folder</button>
+      </form>
+      <form method="post" action="{{ url_for('away_page') }}" class="row" style="margin-top:8px">
+        <input type="hidden" name="action" value="use_folder">
+        <input type="text" name="folder_link" placeholder="…or paste a Drive folder link" size="34">
+        <button class="btn secondary" type="submit">Use link</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="forms">
+    <h2>3 · Schedule</h2>
+    <div class="row">
+      <form method="post" action="{{ url_for('away_page') }}" class="row">
+        <input type="hidden" name="action" value="toggle">
+        <button class="btn {% if enabled %}danger{% endif %}" type="submit">
+          {% if enabled %}⏸ Pause Away mode{% else %}▶ Enable Away mode{% endif %}
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('away_page') }}" class="row">
+        <input type="hidden" name="action" value="interval">
+        <label>Check every
+          <select name="interval_min">
+            {% for m in [15, 30, 60, 120] %}
+              <option value="{{ m }}" {% if interval_min == m %}selected{% endif %}>{{ m }} min</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="btn secondary" type="submit">Save</button>
+      </form>
+      <form method="post" action="{{ url_for('away_page') }}">
+        <input type="hidden" name="action" value="run_now">
+        <button class="btn secondary" type="submit">▶ Run a check now</button>
+      </form>
+    </div>
+    <p class="kv"><b>Status</b>
+      {% if enabled %}<span class="status-dot on"></span>Active — checking every {{ interval_min }} min
+      {% else %}<span class="status-dot off"></span>Paused{% endif %}
+    </p>
+    {% if last_run %}<p class="kv"><b>Last check</b> {{ last_run }}</p>{% endif %}
+  </section>
+
+  <section class="forms">
+    <h2>Recent checks</h2>
+    {% if runs %}
+    <table class="runs">
+      <tr><th>When</th><th>Checked</th><th>Clean</th><th>Needs attention</th><th>Failed</th><th>Status</th><th>Note</th></tr>
+      {% for r in runs %}
+      <tr>
+        <td>{{ r.when }}</td><td>{{ r.checked }}</td><td>{{ r.clean }}</td>
+        <td>{{ r.attention }}</td><td>{{ r.failed }}</td>
+        <td>{% if r.status == "ok" %}<span class="ok-badge">ok</span>
+            {% elif r.status == "partial" %}<span class="err-badge">partial</span>
+            {% else %}<span class="err-badge">{{ r.status }}</span>{% endif %}</td>
+        <td class="hint">{{ r.note }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+      <p class="hint">No checks yet. Enable Away mode or run a check now.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</main>
+</body>
+</html>
