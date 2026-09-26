@@ -5,3 +5,4 @@ __pycache__/
 proto_*.py
 .DS_Store
 *.db
+away_watcher/
