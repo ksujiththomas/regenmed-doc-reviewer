@@ -794,8 +794,10 @@ def check_mp_f018(pages):
     issues = []
 
     # --- top: Donor #, Authorized By/Date, Reason must not be blank
-    if not is_filled(img, t["donor_box"]):
-        issues.append(_issue("error", "Donor #", "Donor # is blank.", t["donor_box"]))
+    # Donor # is checked on the value zone (right of the printed "Donor #:"
+    # label); the label's own ink would otherwise mask a blank number.
+    if not is_filled(img, t["donor_value_box"]):
+        issues.append(_issue("error", "Donor #", "Donor # is blank.", t["donor_value_box"]))
 
     abox = t["auth_box"]
     if not is_filled(img, abox):

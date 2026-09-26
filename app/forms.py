@@ -25,7 +25,7 @@ MP_F_023 = {
     # Donor # value is handwritten right of the printed label; the value zone
     # excludes the printed "Donor #" text (which would otherwise make the
     # blank check vacuous).
-    "donor_value_box": (0.095, 0.078, 0.16, 0.102),
+    "donor_value_box": (0.117, 0.078, 0.16, 0.098),
     # "Verified By" cell under Donor #: initials required; zone excludes the
     # printed label at left.
     "verified_by_box": (0.10, 0.118, 0.16, 0.148),
@@ -123,6 +123,10 @@ MP_F_018 = {
     "title_markers": ["Tissue Discard Form", "DISCARD FORM"],
     # top fields (value zones exclude printed labels)
     "donor_box": (0.075, 0.100, 0.180, 0.130),
+    # Value zone inside donor_box: right of the printed "Donor #:" label and
+    # below the row's top rule. The label + rule alone are enough ink to make
+    # is_filled() pass, so a blank donor number was never flagged.
+    "donor_value_box": (0.1265, 0.118, 0.180, 0.130),
     "auth_box": (0.560, 0.098, 0.965, 0.138),
     "reason_box": (0.200, 0.130, 0.965, 0.158),
     # Tissue Status checkboxes (17px at 150dpi; tight boxes avoid label text)
