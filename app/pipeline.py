@@ -143,7 +143,7 @@ def annotate(img, issues, page_idx):
     return out
 
 
-def run(pdf_bytes, annotate_pages=True):
+def run(pdf_bytes, annotate_pages=True, filename=""):
     """Full review pipeline.
 
     annotate_pages=False skips drawing issue boxes (batch mode never
@@ -167,6 +167,15 @@ def run(pdf_bytes, annotate_pages=True):
                        "box": None, "page": 0})
     annotated = [annotate(p, issues, i) for i, p in enumerate(pages)] \
         if annotate_pages else []
-    return {"form_code": code, "form_name": FORMS[code]["name"],
-            "issues": issues, "pages": len(pages), "annotated": annotated,
-            "note": None}
+    result = {"form_code": code, "form_name": FORMS[code]["name"],
+              "issues": issues, "pages": len(pages), "annotated": annotated,
+              "note": None, "ai_summary": None}
+    # Optional Gemini layer (text-only): consistency findings + plain-language
+    # summary. Silent no-op unless HACKATHON_API_KEY is set; never breaks
+    # the geometric review.
+    try:
+        from app.ai_review import enhance
+        enhance(result, pages, filename)
+    except Exception:  # noqa: BLE001
+        pass
+    return result

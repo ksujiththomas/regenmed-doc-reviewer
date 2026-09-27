@@ -106,7 +106,7 @@ def _single_report(f):
     pdf_bytes = f.read()
     already = _dup_check(pdf_bytes, f.filename)
     try:
-        result = run(pdf_bytes)
+        result = run(pdf_bytes, filename=f.filename)
     except ReviewError as exc:
         return render_template("index.html", error=str(exc))
     except Exception:  # noqa: BLE001 - never leak internals to the user
@@ -141,6 +141,7 @@ def _single_report(f):
         passed=(len(errors) == 0),
         pages=pages,
         already=already,
+        ai_summary=result.get("ai_summary"),
     )
 
 
@@ -173,7 +174,7 @@ def _run_batch_core(payloads):
         idx, filename, pdf_bytes = args
         already = alreadys[idx]
         try:
-            r = run(pdf_bytes, annotate_pages=False)
+            r = run(pdf_bytes, annotate_pages=False, filename=filename)
         except ReviewError as exc:
             return idx, {"filename": filename, "ok": False, "error": str(exc),
                          "already": already}
@@ -201,6 +202,7 @@ def _run_batch_core(payloads):
             "passed": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
+            "ai_summary": r.get("ai_summary"),
             "already": already,
             "_sha": shas[idx],
         }
@@ -296,7 +298,7 @@ def api_review():
     for r in results:
         c = {k: r.get(k) for k in ("filename", "ok", "form_code", "form_name",
                                    "n_errors", "n_warnings", "passed",
-                                   "errors", "warnings", "error")}
+                                   "errors", "warnings", "error", "ai_summary")}
         clean.append(c)
     return jsonify({"results": clean})
 

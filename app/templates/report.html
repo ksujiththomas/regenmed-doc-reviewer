@@ -19,6 +19,13 @@
     ({{ already.n_errors }} error(s), {{ already.n_warnings }} warning(s) then).</div>
   {% endif %}
 
+  {% if ai_summary %}
+  <div class="ai-summary">
+    <h2>AI review summary</h2>
+    <p>{{ ai_summary }}</p>
+  </div>
+  {% endif %}
+
   {% if passed %}
   <div class="pass">✓ All required fields are present and consistent. No issues found.</div>
   {% else %}
